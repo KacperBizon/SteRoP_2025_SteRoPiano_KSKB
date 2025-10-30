@@ -22,7 +22,7 @@
 #include "dma.h"
 #include "i2c.h"
 #include "sai.h"
-#include "usb_host.h"
+#include "usb_device.h"
 #include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
@@ -67,11 +67,8 @@ __IO int16_t      UpdatePointer = -1;       // flaga do sprawdzania, czy transmi
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
-
 void SystemClock_Config(void);
 void PeriphCommonClock_Config(void);
-void MX_USB_HOST_Process(void);
-
 /* USER CODE BEGIN PFP */
 
 static void Playback_Init(void); // prototyp funkcji do inicjalizacji audio
@@ -120,7 +117,7 @@ int main(void)
   MX_DMA_Init();
   MX_I2C1_Init();
   MX_SAI1_Init();
-  MX_USB_HOST_Init();
+  MX_USB_DEVICE_Init();
   MX_DFSDM1_Init();
   /* USER CODE BEGIN 2 */
 
@@ -173,7 +170,6 @@ int main(void)
 	    }
 
     /* USER CODE END WHILE */
-    MX_USB_HOST_Process();
 
     /* USER CODE BEGIN 3 */
   }
