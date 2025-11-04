@@ -30,6 +30,7 @@
 
 #include "stm32l476g_discovery_audio.h" // do obslugi funkcji audio
 #include "stm32l476g_discovery.h"       // LED i inicjacja I2C
+#include "math.h"
 
 /* USER CODE END Includes */
 
@@ -72,6 +73,7 @@ void PeriphCommonClock_Config(void);
 /* USER CODE BEGIN PFP */
 
 static void Playback_Init(void); // prototyp funkcji do inicjalizacji audio
+void GenerateSoundToBuffer(float f);
 
 /* USER CODE END PFP */
 
@@ -147,27 +149,27 @@ int main(void)
   while (1)
   {
 	  BSP_LED_Toggle(LED5); // miganie zielona dioda - program dziala poprawnie
-
-	    while(UpdatePointer == -1) //sprawdzenie czy transfer DMA w porzadku
-	    {
-	        // HAL_PWR_EnterSLEEPMode(PWR_MAINREGULATOR_ON, PWR_SLEEPENTRY_WFI);
-	    }
-
-	    int position = UpdatePointer; // sprawdzenie ktora polowa bufora wolna (0 lub PLAY_BUFF_SIZE/2)
-	    UpdatePointer = -1; // reset flagi
-
-	    for(int i = 0; i < PLAY_BUFF_SIZE/2; i++) // uzupelnienie wolnej polowy bufora danymi
-	    {
-	    	// odczyt danych z flash
-	        PlayBuff[i + position] = *((__IO uint16_t *)(AUDIO_FILE_ADDRESS + PlaybackPosition));
-	        PlaybackPosition += 2; // przesuniecie adresu o 2 bajty (bo uint16, a nie 8)
-	    }
-
-	    // sprawdzenie, czy koniec danych
-	    if((PlaybackPosition + (PLAY_BUFF_SIZE)) > AUDIO_FILE_SIZE) // jesli nastepna operacja przekroczy rozmiar pliku
-	    {
-	        PlaybackPosition = PLAY_HEADER; // wraca na poczatek pliku
-	    }
+	  GenerateSoundToBuffer(440.0f);
+//	    while(UpdatePointer == -1) //sprawdzenie czy transfer DMA w porzadku
+//	    {
+//	        // HAL_PWR_EnterSLEEPMode(PWR_MAINREGULATOR_ON, PWR_SLEEPENTRY_WFI);
+//	    }
+//
+//	    int position = UpdatePointer; // sprawdzenie ktora polowa bufora wolna (0 lub PLAY_BUFF_SIZE/2)
+//	    UpdatePointer = -1; // reset flagi
+//
+//	    for(int i = 0; i < PLAY_BUFF_SIZE/2; i++) // uzupelnienie wolnej polowy bufora danymi
+//	    {
+//	    	// odczyt danych z flash
+//	        PlayBuff[i + position] = *((__IO uint16_t *)(AUDIO_FILE_ADDRESS + PlaybackPosition));
+//	        PlaybackPosition += 2; // przesuniecie adresu o 2 bajty (bo uint16, a nie 8)
+//	    }
+//
+//	    // sprawdzenie, czy koniec danych
+//	    if((PlaybackPosition + (PLAY_BUFF_SIZE)) > AUDIO_FILE_SIZE) // jesli nastepna operacja przekroczy rozmiar pliku
+//	    {
+//	        PlaybackPosition = PLAY_HEADER; // wraca na poczatek pliku
+//	    }
 
     /* USER CODE END WHILE */
 
@@ -271,6 +273,52 @@ static void Playback_Init(void) // funkcja odpowiedzialna za przetwarzanie audio
   {
     Error_Handler();
   }
+}
+
+void GenerateSoundToBuffer(float f)
+{
+    const float sample_rate = 22050.0f;
+    const float amplitude = 30000.0f;  // max 32767 for int16
+    const float phase_advance = 2.0f * M_PI * f / sample_rate; // 2pi*f/fs
+
+    static float phase = 0.0f;
+    static float t = 0.0f;
+
+    // Wait until DMA half/full complete flag is set
+    while (UpdatePointer == -1) { }
+
+    int pos = UpdatePointer;  // 0 or PLAY_BUFF_SIZE/2
+    UpdatePointer = -1;
+
+    for (int i = 0; i < PLAY_BUFF_SIZE/2; i += 2)
+    {
+          float s =
+        	      1.0f * sinf(1.0f * phase)                // fundamental
+        	    + 0.6f * sinf(2.01f * phase)               // 2nd harmonic
+        	    + 0.4f * sinf(3.02f * phase)               // 3rd harmonic
+        	    + 0.2f * sinf(4.05f * phase)               // 4th harmonic
+        	    + 0.05f * ((float)rand()/RAND_MAX - 0.5f); // small random noise
+
+          float env = expf(-t * 1.5f);   // exponential decay
+          s *= env;
+
+          // Scale to 16-bit
+          int16_t sample = (int16_t)(amplitude * s);
+
+          // Advance phase/time
+          phase += phase_advance;
+          if (phase >= 2.0f * M_PI)
+        	  phase -= 2.0f * M_PI;
+
+          t += 1.0f / sample_rate;
+
+          if (t > 1.0f)
+        	  t = 0.0f; // restart envelope every ~1s
+
+          // Stereo output
+          PlayBuff[pos + i]     = (uint16_t)sample; // Left
+          PlayBuff[pos + i + 1] = (uint16_t)sample; // Right
+    }
 }
 
 
