@@ -292,15 +292,21 @@ void GenerateSoundToBuffer(float f)
 
     for (int i = 0; i < PLAY_BUFF_SIZE/2; i += 2)
     {
-          float s =
-        	      1.0f * sinf(1.0f * phase)                // fundamental
-        	    + 0.6f * sinf(2.01f * phase)               // 2nd harmonic
-        	    + 0.4f * sinf(3.02f * phase)               // 3rd harmonic
-        	    + 0.2f * sinf(4.05f * phase)               // 4th harmonic
-        	    + 0.05f * ((float)rand()/RAND_MAX - 0.5f); // small random noise
+    	float env_fundamental = expf(-t * 1.5f);
+    	float env_harmonics = expf(-t * 6.0f);
 
-          float env = expf(-t * 1.5f);   // exponential decay
-          s *= env;
+    	//float env = 4.7*sqrt(t)*(1-t)*(1-t)*(1-t)*(1-t);
+		//float env = expf(-15.0 * (t-0.5)*(t-0.5));
+		//float env = expf(-t * 2.5f);   // exponential decay
+
+		float s =
+			  1.0f * sinf(phase) * env_fundamental     					// fundamental
+			+ (0.55f * sinf(2.0f * phase)              					// 2nd harmonic
+			+ 0.2f * sinf(3.0f * phase)                					// 3rd harmonic
+			+ 0.18f * sinf(4.0f * phase)               					// 4th harmonic
+			+ 0.15f * sinf(5.0f * phase)               					// 5th harmonic
+			+ 0.05f * ((float)rand()/RAND_MAX - 0.5f)) * env_harmonics; // small random noise
+
 
           // Scale to 16-bit
           int16_t sample = (int16_t)(amplitude * s);
@@ -312,12 +318,12 @@ void GenerateSoundToBuffer(float f)
 
           t += 1.0f / sample_rate;
 
-          if (t > 1.0f)
-        	  t = 0.0f; // restart envelope every ~1s
+          if (t > 1.5f)
+        	  t = 0.0f;
 
           // Stereo output
-          PlayBuff[pos + i]     = (uint16_t)sample; // Left
-          PlayBuff[pos + i + 1] = (uint16_t)sample; // Right
+          PlayBuff[pos + i]     = (int16_t)sample; // Left
+          PlayBuff[pos + i + 1] = (int16_t)sample; // Right
     }
 }
 
