@@ -65,6 +65,28 @@ AUDIO_DrvTypeDef *audio_drv;          		// wskaznik na driver audio
 uint16_t          PlayBuff[PLAY_BUFF_SIZE]; // bufor
 __IO int16_t      UpdatePointer = -1;       // flaga do sprawdzania, czy transmizja DMA sie powiodla
 
+// nuty - oktawa podstawowa
+#define NOTE_C4  261.63f
+#define NOTE_D4  293.66f
+#define NOTE_E4  329.63f
+#define NOTE_F4  349.23f
+#define NOTE_G4  392.00f
+#define NOTE_A4  440.00f
+#define NOTE_B4  493.88f
+#define NOTE_C5  523.25f
+
+// podstawowa oktawa do testow
+float scale[] = { NOTE_C4, NOTE_D4, NOTE_E4, NOTE_F4, NOTE_G4, NOTE_A4, NOTE_B4, NOTE_C5 };
+
+// zmienne syntezatora
+volatile float current_t = 10.0f;     // czas trwania jednej nuty
+volatile float current_phase = 0.0f;  // faza sinusa
+volatile float current_phase_detune = 0.0f; // rozstrojenie dla naturalnosci
+volatile float current_freq = 261.63f; // czestotliwosc
+
+int melody_step = 0;
+uint32_t last_note_time = 0;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -73,7 +95,8 @@ void PeriphCommonClock_Config(void);
 /* USER CODE BEGIN PFP */
 
 static void Playback_Init(void); // prototyp funkcji do inicjalizacji audio
-void GenerateSoundToBuffer(float f);
+void GenerateSoundToBuffer(void); // prototyp funkcji generujacej dzwieki
+void PlayNote(float freq); // funkcja wywolujaca nowa nute
 
 /* USER CODE END PFP */
 
@@ -91,7 +114,7 @@ int main(void)
 
   /* USER CODE BEGIN 1 */
 
-  uint32_t PlaybackPosition = PLAY_BUFF_SIZE + PLAY_HEADER; // pozycja odtwarzacza = rozmiar bufora + rozmiar naglowka wav
+  //uint32_t PlaybackPosition = PLAY_BUFF_SIZE + PLAY_HEADER; // pozycja odtwarzacza = rozmiar bufora + rozmiar naglowka wav
 
   /* USER CODE END 1 */
 
@@ -149,7 +172,20 @@ int main(void)
   while (1)
   {
 	  BSP_LED_Toggle(LED5); // miganie zielona dioda - program dziala poprawnie
-	  GenerateSoundToBuffer(440.0f);
+	  GenerateSoundToBuffer();
+
+	  // 2. Prosty sekwencer - zmiana nuty co 500ms
+	    if (HAL_GetTick() - last_note_time > 500)
+	    {
+	        // Graj kolejną nutę z tablicy scale[]
+	        PlayNote(scale[melody_step]);
+
+	        melody_step++;
+	        if (melody_step >= 8) melody_step = 0; // Wróć do C4
+
+	        last_note_time = HAL_GetTick();
+	    }
+
 //	    while(UpdatePointer == -1) //sprawdzenie czy transfer DMA w porzadku
 //	    {
 //	        // HAL_PWR_EnterSLEEPMode(PWR_MAINREGULATOR_ON, PWR_SLEEPENTRY_WFI);
@@ -269,72 +305,75 @@ static void Playback_Init(void) // funkcja odpowiedzialna za przetwarzanie audio
   audio_drv->Reset(AUDIO_I2C_ADDRESS);	// zresetowanie drivera audio
 
   // konfiguracja adresow I2C, urzadzenia wyjsciowego, glosnosci i czestotliwosci
-  if(0 != audio_drv->Init(AUDIO_I2C_ADDRESS, OUTPUT_DEVICE_HEADPHONE, 80, AUDIO_FREQUENCY_22K))
+  if(0 != audio_drv->Init(AUDIO_I2C_ADDRESS, OUTPUT_DEVICE_HEADPHONE, 80, AUDIO_FREQUENCY_44K)) //zmieniona czestotliwosc na 44k
   {
     Error_Handler();
   }
 }
 
-void GenerateSoundToBuffer(float f)
+void GenerateSoundToBuffer(void)
 {
-    const float sample_rate = 22050.0f;
-    const float amplitude = 30000.0f;  // max 32767 for int16
-    const float phase_advance = 2.0f * M_PI * f / sample_rate; // 2pi*f/fs
+    const float sample_rate = 44100.0f; // czestotliwosc probkowania
+    const float amplitude = 28000.0f;  // glosnosc,  max 32767 dla int16
+    const float phase_advance = 2.0f * M_PI * current_freq / sample_rate; // krok zmiany fazy, 2pi*f/fs
+    const float phase_advance_detune = phase_advance * 1.0015f; // analogicznie dla drugiej (minimalnie roztrojonej) struny
 
-    static float phase = 0.0f;
-    static float t = 0.0f;
+    float stereo = 0.3f + (current_freq / 1000.0f);
+        if (stereo < 0.2f) stereo = 0.2f;
+        if (stereo > 0.8f) stereo = 0.8f;
+        float vol_left = 1.0f - stereo;
+        float vol_right = stereo;
 
-    // Wait until DMA half/full complete flag is set
-    while (UpdatePointer == -1) { }
-
+    while (UpdatePointer == -1) { } // obsluga buforowania
     int pos = UpdatePointer;  // 0 or PLAY_BUFF_SIZE/2
     UpdatePointer = -1;
 
-    for (int i = 0; i < PLAY_BUFF_SIZE/2; i += 2)
+    for (int i = 0; i < PLAY_BUFF_SIZE/2; i += 2) // skok o dwa - raz lewy raz prawy kanal
     {
-    	float env_fundamental = expf(-t * 1.5f);
-    	float env_harmonics = expf(-t * 6.0f);
+    	if (current_t > 3.5f) { // wyciszenie nuty po 3,5s
+    	            PlayBuff[pos + i] = 0;
+    	            PlayBuff[pos + i + 1] = 0;
+    	            continue;
+    	        }
+    	 float fm_intensity = 1.2f * expf(-current_t * 12.0f); // eksponencjalne znieksztalcenie dzwieku
+    	 float s1 = sinf(current_phase + fm_intensity * sinf(current_phase)); // charakterystyka aktualnego dzwieku (modulacja fm)
+    	 float s2 = sinf(current_phase_detune); // rozstrojona struna w tle, dla realizmu
 
-    	//float env = 4.7*sqrt(t)*(1-t)*(1-t)*(1-t)*(1-t);
-		//float env = expf(-15.0 * (t-0.5)*(t-0.5));
-		//float env = expf(-t * 2.5f);   // exponential decay
-
-		float s =
-			  1.0f * sinf(phase) * env_fundamental     					// fundamental
-			+ (0.55f * sinf(2.0f * phase)              					// 2nd harmonic
-			+ 0.2f * sinf(3.0f * phase)                					// 3rd harmonic
-			+ 0.18f * sinf(4.0f * phase)               					// 4th harmonic
-			+ 0.15f * sinf(5.0f * phase)               					// 5th harmonic
-			+ 0.05f * ((float)rand()/RAND_MAX - 0.5f)) * env_harmonics; // small random noise
+    	 float hammer = 0.0f; // imitacja uderzenia mloteczka w strune - dla realizmu
+    	 if(current_t < 0.02f) // dziala tylko przez pierwsze 0,02s
+    		 hammer = 0.15f * sinf(current_phase * 0.5f); // dzwiek o pol oktawy nizszy niz grana nuta
 
 
-          // Scale to 16-bit
-          int16_t sample = (int16_t)(amplitude * s);
+    	 float fade_rate = 0.6f + (current_freq / 800.0f); // wyliczenie zanikania drgan - szybsze dla wyzszych dzwiekow
+    	 float vol_fade = expf(-current_t * fade_rate);
+    	 float mixed_signal = (0.45f * s1 + 0.55f * s2) * vol_fade + hammer; // finalny sygnal wyjsciowy
 
-          // Advance phase/time
-          phase += phase_advance;
-          if (phase >= 2.0f * M_PI)
-        	  phase -= 2.0f * M_PI;
+    	 if (mixed_signal > 1.0f) mixed_signal = 1.0f; // normowanie
+    	 if (mixed_signal < -1.0f) mixed_signal = -1.0f;
 
-          t += 1.0f / sample_rate;
+         int16_t sample = (int16_t)(amplitude * mixed_signal); // rzutowanie
 
-          if (t > 1.5f)
-        	  t = 0.0f;
+         PlayBuff[pos + i]     = (int16_t)(sample * vol_left); // stereo lewa
+         PlayBuff[pos + i + 1] = (int16_t)(sample * vol_right); // stereo prawa
 
-          // Stereo output
-          PlayBuff[pos + i]     = (int16_t)sample; // Left
-          PlayBuff[pos + i + 1] = (int16_t)sample; // Right
+         current_phase += phase_advance; // przejscie do kolejnego kata fazy
+         if (current_phase >= 2.0f * M_PI)
+        	 current_phase -= 2.0f * M_PI;
+         current_phase_detune += phase_advance_detune;
+         if (current_phase_detune >= 2.0f * M_PI)
+        	 current_phase_detune -= 2.0f * M_PI;
+
+         current_t += 1.0f / sample_rate; // zanikanie dzwieku w czasie
     }
 }
 
-
-/**
-  * @brief Tx Transfer completed callbacks.
-  * @param  hsai : pointer to a SAI_HandleTypeDef structure that contains
-  * the configuration information for SAI module.
-  * @retval None
-  */
-
+void PlayNote(float freq)
+{
+    current_freq = freq;
+    current_t = 0.0f;     // Reset czasu -> start dźwięku (uderzenie młotka)
+    current_phase = 0.0f; // Reset fazy -> czysty start fali (opcjonalne, ale zalecane dla perkusyjności)
+    current_phase_detune = 0.0f;
+}
 
 /* USER CODE END 4 */
 
