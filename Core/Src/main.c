@@ -47,6 +47,18 @@
 #define PLAY_HEADER          0x2C       // rozmiar naglowka wav
 #define PLAY_BUFF_SIZE       4096       // rozmiar bufora
 
+// nuty - oktawa podstawowa
+#define NOTE_C4  261.63f
+#define NOTE_D4  293.66f
+#define NOTE_E4  329.63f
+#define NOTE_F4  349.23f
+#define NOTE_G4  392.00f
+#define NOTE_A4  440.00f
+#define NOTE_B4  493.88f
+#define NOTE_C5  523.25f
+
+#define MAX_KEYS 3
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -65,27 +77,26 @@ AUDIO_DrvTypeDef *audio_drv;          		// wskaznik na driver audio
 uint16_t          PlayBuff[PLAY_BUFF_SIZE]; // bufor
 __IO int16_t      UpdatePointer = -1;       // flaga do sprawdzania, czy transmizja DMA sie powiodla
 
-// nuty - oktawa podstawowa
-#define NOTE_C4  261.63f
-#define NOTE_D4  293.66f
-#define NOTE_E4  329.63f
-#define NOTE_F4  349.23f
-#define NOTE_G4  392.00f
-#define NOTE_A4  440.00f
-#define NOTE_B4  493.88f
-#define NOTE_C5  523.25f
 
 // podstawowa oktawa do testow
 float scale[] = { NOTE_C4, NOTE_D4, NOTE_E4, NOTE_F4, NOTE_G4, NOTE_A4, NOTE_B4, NOTE_C5 };
 
-// zmienne syntezatora
-volatile float current_t = 10.0f;     // czas trwania jednej nuty
-volatile float current_phase = 0.0f;  // faza sinusa
-volatile float current_phase_detune = 0.0f; // rozstrojenie dla naturalnosci
-volatile float current_freq = 261.63f; // czestotliwosc
+
+typedef struct {
+    int flag;       	  			// jesli gra - flaga na 1, jesli nie - flaga na 0
+    volatile float freq;           // czestotliwosc dzwieku
+    volatile float t;              //czas trwania
+    volatile float phase;          // faza fali
+    volatile float phase_detune;   // faza rozstrojenia
+} PianoKey;
+
+PianoKey keys[MAX_KEYS]; // tablica grajacych klawiszy (dzwiekow) pianina
 
 int melody_step = 0;
 uint32_t last_note_time = 0;
+
+float two_pi = 6.28318;
+
 
 /* USER CODE END PV */
 
@@ -97,6 +108,7 @@ void PeriphCommonClock_Config(void);
 static void Playback_Init(void); // prototyp funkcji do inicjalizacji audio
 void GenerateSoundToBuffer(void); // prototyp funkcji generujacej dzwieki
 void PlayNote(float freq); // funkcja wywolujaca nowa nute
+void NextSound(int16_t *out_left, int16_t *out_right);
 
 /* USER CODE END PFP */
 
@@ -174,16 +186,21 @@ int main(void)
 	  BSP_LED_Toggle(LED5); // miganie zielona dioda - program dziala poprawnie
 	  GenerateSoundToBuffer();
 
-	  // 2. Prosty sekwencer - zmiana nuty co 500ms
 	    if (HAL_GetTick() - last_note_time > 500)
 	    {
-	        // Graj kolejną nutę z tablicy scale[]
-	        PlayNote(scale[melody_step]);
+//	        PlayNote(scale[melody_step]);
+//
+//	        melody_step++;
+//	        if (melody_step >= 8) melody_step = 0;
+//
+//	        last_note_time = HAL_GetTick();
 
-	        melody_step++;
-	        if (melody_step >= 8) melody_step = 0; // Wróć do C4
+	    	PlayNote(NOTE_C4);
+	    	PlayNote(NOTE_F4);
+	    	PlayNote(NOTE_C5);
 
-	        last_note_time = HAL_GetTick();
+	    	BSP_LED_Toggle(LED5);
+	    	last_note_time = HAL_GetTick();
 	    }
 
 //	    while(UpdatePointer == -1) //sprawdzenie czy transfer DMA w porzadku
@@ -313,66 +330,110 @@ static void Playback_Init(void) // funkcja odpowiedzialna za przetwarzanie audio
 
 void GenerateSoundToBuffer(void)
 {
-    const float sample_rate = 44100.0f; // czestotliwosc probkowania
-    const float amplitude = 28000.0f;  // glosnosc,  max 32767 dla int16
-    const float phase_advance = 2.0f * M_PI * current_freq / sample_rate; // krok zmiany fazy, 2pi*f/fs
-    const float phase_advance_detune = phase_advance * 1.0015f; // analogicznie dla drugiej (minimalnie roztrojonej) struny
-
-    float stereo = 0.3f + (current_freq / 1000.0f);
-        if (stereo < 0.2f) stereo = 0.2f;
-        if (stereo > 0.8f) stereo = 0.8f;
-        float vol_left = 1.0f - stereo;
-        float vol_right = stereo;
-
     while (UpdatePointer == -1) { } // obsluga buforowania
     int pos = UpdatePointer;  // 0 or PLAY_BUFF_SIZE/2
     UpdatePointer = -1;
 
     for (int i = 0; i < PLAY_BUFF_SIZE/2; i += 2) // skok o dwa - raz lewy raz prawy kanal
     {
-    	if (current_t > 3.5f) { // wyciszenie nuty po 3,5s
-    	            PlayBuff[pos + i] = 0;
-    	            PlayBuff[pos + i + 1] = 0;
-    	            continue;
-    	        }
-    	 float fm_intensity = 1.2f * expf(-current_t * 12.0f); // eksponencjalne znieksztalcenie dzwieku
-    	 float s1 = sinf(current_phase + fm_intensity * sinf(current_phase)); // charakterystyka aktualnego dzwieku (modulacja fm)
-    	 float s2 = sinf(current_phase_detune); // rozstrojona struna w tle, dla realizmu
+    	 int16_t sample_left, sample_right;
 
-    	 float hammer = 0.0f; // imitacja uderzenia mloteczka w strune - dla realizmu
-    	 if(current_t < 0.02f) // dziala tylko przez pierwsze 0,02s
-    		 hammer = 0.15f * sinf(current_phase * 0.5f); // dzwiek o pol oktawy nizszy niz grana nuta
+         NextSound(&sample_left, &sample_right);
 
-
-    	 float fade_rate = 0.6f + (current_freq / 800.0f); // wyliczenie zanikania drgan - szybsze dla wyzszych dzwiekow
-    	 float vol_fade = expf(-current_t * fade_rate);
-    	 float mixed_signal = (0.45f * s1 + 0.55f * s2) * vol_fade + hammer; // finalny sygnal wyjsciowy
-
-    	 if (mixed_signal > 1.0f) mixed_signal = 1.0f; // normowanie
-    	 if (mixed_signal < -1.0f) mixed_signal = -1.0f;
-
-         int16_t sample = (int16_t)(amplitude * mixed_signal); // rzutowanie
-
-         PlayBuff[pos + i]     = (int16_t)(sample * vol_left); // stereo lewa
-         PlayBuff[pos + i + 1] = (int16_t)(sample * vol_right); // stereo prawa
-
-         current_phase += phase_advance; // przejscie do kolejnego kata fazy
-         if (current_phase >= 2.0f * M_PI)
-        	 current_phase -= 2.0f * M_PI;
-         current_phase_detune += phase_advance_detune;
-         if (current_phase_detune >= 2.0f * M_PI)
-        	 current_phase_detune -= 2.0f * M_PI;
-
-         current_t += 1.0f / sample_rate; // zanikanie dzwieku w czasie
+         PlayBuff[pos + i]     = sample_left; // zapis do bufora
+         PlayBuff[pos + i + 1] = sample_right;
     }
 }
 
 void PlayNote(float freq)
 {
-    current_freq = freq;
-    current_t = 0.0f;     // Reset czasu -> start dźwięku (uderzenie młotka)
-    current_phase = 0.0f; // Reset fazy -> czysty start fali (opcjonalne, ale zalecane dla perkusyjności)
-    current_phase_detune = 0.0f;
+	static int last = 0; // zapamietanie ostatiego wykorzystanego indeksu tablicy
+	int empty = -1; // indeks niewykorzystanego klawisza (szukany)
+	for (int i = 0; i < MAX_KEYS; i++){
+		int idx = (last + 1 + i) % MAX_KEYS; // zaczyna przeszukiwanie od ostatniego zapisanego
+		if (keys[idx].flag == 0){ // jak znajdzie pusty
+			empty = idx; // to zapisuje do dalszego uzycia
+			break;
+		}
+	}
+	if (empty == -1) // a jak nie znajdzie
+		empty = (last + 1) % MAX_KEYS; // to nadpisuje nastepny po tym ostatnio uzytym
+
+	last = empty;
+
+	keys[empty].flag = 1;
+    keys[empty].freq = freq;
+    keys[empty].t = 0.0f;
+    keys[empty].phase = 0.0f;
+    keys[empty].phase_detune = 0.0f;
+}
+
+void NextSound(int16_t *out_left, int16_t *out_right)
+{
+    const float sample_rate = 44100.0f;
+    const float amplitude = 28000.0f / MAX_KEYS;
+
+    float mixed_left = 0.0f;
+    float mixed_right = 0.0f;
+
+    for (int i = 0; i < MAX_KEYS; i++)
+    {
+        if (!keys[i].flag) continue;
+
+        float t = keys[i].t;
+
+        if (t > 1.0f) {
+            keys[i].flag = 0;
+            continue;
+        }
+
+        float fm_intensity = 0.0f;
+        if (t < 0.1f)
+        	fm_intensity = 1.0f - (t * 10.0f); // odejmowanie zamiast liczenia eksponenty - odciazenie procesora
+
+        float phase = keys[i].phase;
+
+        float s1 = sinf(phase + fm_intensity * sinf(phase)); // charakterystyka aktualnego dzwieku (modulacja fm)
+        float s2 = sinf(keys[i].phase_detune); // rozstrojona struna w tle, dla realizmu
+
+        float hammer = 0.0f; // imitacja uderzenia mloteczka w strune - dla realizmu
+        if(t < 0.02f) // dziala tylko przez pierwsze 0,02s
+        	hammer = 0.2f * sinf(t * 500.0f); // dzwiek o pol oktawy nizszy niz grana nuta
+
+
+        float vol_fade = 1.0f - t;
+        if(vol_fade < 0.0f)
+        	vol_fade = 0.0f;
+
+        float mixed_signal = ((0.5f * s1 + 0.5f * s2) * vol_fade + hammer) / MAX_KEYS; // finalny sygnal wyjsciowy
+
+        float stereo = 0.5f;
+        mixed_left += mixed_signal *(1.0f - stereo);
+        mixed_right += mixed_signal * stereo;
+
+        float freq = keys[i].freq;
+
+        float phase_advance = two_pi * freq / sample_rate; // krok zmiany fazy, 2pi*f/fs
+        float phase_advance_detune = phase_advance * 1.0015f; // analogicznie dla drugiej (minimalnie roztrojonej) struny
+
+        keys[i].phase += phase_advance; // przejscie do kolejnego kata fazy
+        if (keys[i].phase >= two_pi)
+        	keys[i].phase -= two_pi;
+        keys[i].phase_detune += phase_advance_detune;
+        if (keys[i].phase_detune >= two_pi)
+        	keys[i].phase_detune -= two_pi;
+
+        keys[i].t += 1.0f / sample_rate; // zanikanie dzwieku w czasie
+    }
+
+    if (mixed_left > 1.0f) mixed_left = 1.0f; // normowanie
+    if (mixed_left < -1.0f) mixed_left = -1.0f;
+
+    if (mixed_right > 1.0f) mixed_right = 1.0f; // normowanie
+    if (mixed_right < -1.0f) mixed_right = -1.0f;
+
+    *out_left  = (int16_t)(amplitude * mixed_left);
+    *out_right = (int16_t)(amplitude * mixed_right);
 }
 
 /* USER CODE END 4 */
