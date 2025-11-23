@@ -47,7 +47,16 @@
 #define PLAY_HEADER          0x2C       // rozmiar naglowka wav
 #define PLAY_BUFF_SIZE       4096       // rozmiar bufora
 
-// nuty - oktawa podstawowa
+// nuty - oktawa 3
+#define NOTE_C3  130.81f
+#define NOTE_D3  146.83f
+#define NOTE_E3  164.81f
+#define NOTE_F3  174.61f
+#define NOTE_G3  196.00f
+#define NOTE_A3  220.00f
+#define NOTE_B3  246.94f
+
+// nuty - oktawa 4
 #define NOTE_C4  261.63f
 #define NOTE_D4  293.66f
 #define NOTE_E4  329.63f
@@ -55,7 +64,15 @@
 #define NOTE_G4  392.00f
 #define NOTE_A4  440.00f
 #define NOTE_B4  493.88f
+
+// nuty - oktawa 5
 #define NOTE_C5  523.25f
+#define NOTE_D5  587.33f
+#define NOTE_E5  659.26f
+#define NOTE_F5  698.46f
+#define NOTE_G5  783.99f
+#define NOTE_A5  880.00f
+#define NOTE_B5  987.77f
 
 #define MAX_KEYS 3
 
@@ -96,6 +113,16 @@ int melody_step = 0;
 uint32_t last_note_time = 0;
 
 float two_pi = 6.28318;
+
+float odeToJoy[] = {
+	      NOTE_E4, NOTE_E4, NOTE_F4, NOTE_G4,
+	      NOTE_G4, NOTE_F4, NOTE_E4, NOTE_D4,
+	      NOTE_C4, NOTE_C4, NOTE_D4, NOTE_E4,
+	      NOTE_E4, NOTE_D4, NOTE_D4,
+	      0 // 0 oznacza koniec/pauze
+	  };
+
+int melody_len = 15;
 
 
 /* USER CODE END PV */
@@ -186,7 +213,8 @@ int main(void)
 	  BSP_LED_Toggle(LED5); // miganie zielona dioda - program dziala poprawnie
 	  GenerateSoundToBuffer();
 
-	    if (HAL_GetTick() - last_note_time > 500)
+
+	    if (HAL_GetTick() - last_note_time > 400)
 	    {
 //	        PlayNote(scale[melody_step]);
 //
@@ -195,13 +223,34 @@ int main(void)
 //
 //	        last_note_time = HAL_GetTick();
 
-	    	PlayNote(NOTE_C4);
-	    	PlayNote(NOTE_F4);
-	    	PlayNote(NOTE_C5);
-
-	    	BSP_LED_Toggle(LED5);
-	    	last_note_time = HAL_GetTick();
+//	    	PlayNote(NOTE_C4);
+//	    	PlayNote(NOTE_F4);
+//	    	PlayNote(NOTE_C5);
+//
+//	    	BSP_LED_Toggle(LED5);
+//	    	last_note_time = HAL_GetTick();
 	    }
+
+	    	  uint32_t current_time = HAL_GetTick();
+	    	  uint32_t time_diff = current_time - last_note_time;
+
+	    	  uint32_t wait_time = 400;
+
+	    	  if (melody_step >= melody_len) {
+	    		  wait_time = 2000;
+	    	  }
+
+	    	  if (time_diff > wait_time)
+	    	  {
+	    		  if (melody_step < melody_len) {
+	    			  PlayNote(odeToJoy[melody_step]);
+	    			  melody_step++;
+	    		  } else {
+	    			  melody_step = 0;
+	    		  }
+
+	    		  last_note_time = current_time;
+	    	  }
 
 //	    while(UpdatePointer == -1) //sprawdzenie czy transfer DMA w porzadku
 //	    {
@@ -396,16 +445,16 @@ void NextSound(int16_t *out_left, int16_t *out_right)
         float s1 = sinf(phase + fm_intensity * sinf(phase)); // charakterystyka aktualnego dzwieku (modulacja fm)
         float s2 = sinf(keys[i].phase_detune); // rozstrojona struna w tle, dla realizmu
 
-        float hammer = 0.0f; // imitacja uderzenia mloteczka w strune - dla realizmu
-        if(t < 0.02f) // dziala tylko przez pierwsze 0,02s
-        	hammer = 0.2f * sinf(t * 500.0f); // dzwiek o pol oktawy nizszy niz grana nuta
+        //float hammer = 0.0f; // imitacja uderzenia mloteczka w strune - dla realizmu
+        //if(t < 0.02f) // dziala tylko przez pierwsze 0,02s
+        	//hammer = 0.2f * sinf(t * 500.0f); // dzwiek o pol oktawy nizszy niz grana nuta
 
 
         float vol_fade = 1.0f - t;
         if(vol_fade < 0.0f)
         	vol_fade = 0.0f;
 
-        float mixed_signal = ((0.5f * s1 + 0.5f * s2) * vol_fade + hammer) / MAX_KEYS; // finalny sygnal wyjsciowy
+        float mixed_signal = ((0.5f * s1 + 0.5f * s2) * vol_fade ) / MAX_KEYS; // finalny sygnal wyjsciowy
 
         float stereo = 0.5f;
         mixed_left += mixed_signal *(1.0f - stereo);
