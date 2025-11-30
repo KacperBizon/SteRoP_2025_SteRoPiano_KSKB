@@ -22,6 +22,8 @@
 #include "dma.h"
 #include "i2c.h"
 #include "sai.h"
+#include "tim.h"
+#include "usart.h"
 #include "usb_device.h"
 #include "gpio.h"
 
@@ -87,7 +89,7 @@
 
 /* USER CODE BEGIN PV */
 
-extern SAI_HandleTypeDef hsai_BlockA1; // dostepy
+extern SAI_HandleTypeDef hsai_BlockA1; 		// dostepy
 extern DMA_HandleTypeDef hdma_sai1_a;
 
 AUDIO_DrvTypeDef *audio_drv;          		// wskaznik na driver audio
@@ -100,19 +102,19 @@ float scale[] = { NOTE_C4, NOTE_D4, NOTE_E4, NOTE_F4, NOTE_G4, NOTE_A4, NOTE_B4,
 
 
 typedef struct {
-    int flag;       	  			// jesli gra - flaga na 1, jesli nie - flaga na 0
-    volatile float freq;           // czestotliwosc dzwieku
-    volatile float t;              //czas trwania
-    volatile float phase;          // faza fali
-    volatile float phase_detune;   // faza rozstrojenia
+    int flag;						// jesli gra - flaga na 1, jesli nie - flaga na 0
+    volatile float freq;			// czestotliwosc dzwieku
+    volatile float t;				// czas trwania
+    volatile float phase;			// faza fali
+    volatile float phase_detune;	// faza rozstrojenia
 } PianoKey;
 
-PianoKey keys[MAX_KEYS]; // tablica grajacych klawiszy (dzwiekow) pianina
+PianoKey keys[MAX_KEYS]; 			// tablica grajacych klawiszy (dzwiekow) pianina
 
 int melody_step = 0;
 uint32_t last_note_time = 0;
 
-float two_pi = 6.28318;
+float tau = 6.28318;
 
 float odeToJoy[] = {
 	      NOTE_E4, NOTE_E4, NOTE_F4, NOTE_G4,
@@ -183,6 +185,8 @@ int main(void)
   MX_SAI1_Init();
   MX_USB_DEVICE_Init();
   MX_DFSDM1_Init();
+  MX_TIM6_Init();
+  MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
 
   BSP_LED_Init(LED5); // inicjalizacja led
@@ -208,14 +212,44 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+
   while (1)
   {
-	  BSP_LED_Toggle(LED5); // miganie zielona dioda - program dziala poprawnie
-	  GenerateSoundToBuffer();
+	BSP_LED_Toggle(LED5); //BSP_LED_Toggle(LED5); // miganie zielona dioda - program dziala poprawnie
+	GenerateSoundToBuffer();
+
+	uint32_t current_time = HAL_GetTick();
+	uint32_t time_diff = current_time - last_note_time;
+	uint32_t wait_time = 400;
+
+	if (time_diff >= wait_time)
+	{
+		if (HAL_GPIO_ReadPin(JOY_CENTER_GPIO_Port, JOY_CENTER_Pin) == GPIO_PIN_SET)
+		{
+			printf("JOY_CENTER Pressed!\r\n");
+		}
+	}
 
 
-	    if (HAL_GetTick() - last_note_time > 400)
-	    {
+	// granie Ode To Joy
+	if (melody_step >= melody_len) {
+	  wait_time = 2000;
+	}
+
+	if (time_diff >= wait_time)
+	{
+	  if (melody_step < melody_len) {
+		  PlayNote(odeToJoy[melody_step]);
+		  melody_step++;
+	  } else {
+		  melody_step = 0;
+	  }
+
+	  last_note_time = current_time;
+	}
+// granie MAX_KEYS nut na raz
+//	    if (HAL_GetTick() - last_note_time > 400)
+//	    {
 //	        PlayNote(scale[melody_step]);
 //
 //	        melody_step++;
@@ -229,29 +263,9 @@ int main(void)
 //
 //	    	BSP_LED_Toggle(LED5);
 //	    	last_note_time = HAL_GetTick();
-	    }
+//	    }
 
-	    	  uint32_t current_time = HAL_GetTick();
-	    	  uint32_t time_diff = current_time - last_note_time;
-
-	    	  uint32_t wait_time = 400;
-
-	    	  if (melody_step >= melody_len) {
-	    		  wait_time = 2000;
-	    	  }
-
-	    	  if (time_diff > wait_time)
-	    	  {
-	    		  if (melody_step < melody_len) {
-	    			  PlayNote(odeToJoy[melody_step]);
-	    			  melody_step++;
-	    		  } else {
-	    			  melody_step = 0;
-	    		  }
-
-	    		  last_note_time = current_time;
-	    	  }
-
+// granie muzyki z pliku
 //	    while(UpdatePointer == -1) //sprawdzenie czy transfer DMA w porzadku
 //	    {
 //	        // HAL_PWR_EnterSLEEPMode(PWR_MAINREGULATOR_ON, PWR_SLEEPENTRY_WFI);
@@ -462,15 +476,15 @@ void NextSound(int16_t *out_left, int16_t *out_right)
 
         float freq = keys[i].freq;
 
-        float phase_advance = two_pi * freq / sample_rate; // krok zmiany fazy, 2pi*f/fs
+        float phase_advance = tau * freq / sample_rate; // krok zmiany fazy, 2pi*f/fs
         float phase_advance_detune = phase_advance * 1.0015f; // analogicznie dla drugiej (minimalnie roztrojonej) struny
 
         keys[i].phase += phase_advance; // przejscie do kolejnego kata fazy
-        if (keys[i].phase >= two_pi)
-        	keys[i].phase -= two_pi;
+        if (keys[i].phase >= tau)
+        	keys[i].phase -= tau;
         keys[i].phase_detune += phase_advance_detune;
-        if (keys[i].phase_detune >= two_pi)
-        	keys[i].phase_detune -= two_pi;
+        if (keys[i].phase_detune >= tau)
+        	keys[i].phase_detune -= tau;
 
         keys[i].t += 1.0f / sample_rate; // zanikanie dzwieku w czasie
     }
@@ -483,6 +497,11 @@ void NextSound(int16_t *out_left, int16_t *out_right)
 
     *out_left  = (int16_t)(amplitude * mixed_left);
     *out_right = (int16_t)(amplitude * mixed_right);
+}
+
+int _write(int file, char *ptr, int len){
+	HAL_UART_Transmit(&huart2, (uint8_t *)ptr, len, 50);
+	return len;
 }
 
 /* USER CODE END 4 */
