@@ -73,11 +73,11 @@ void Error_Handler(void);
 #define LD_R_GPIO_Port GPIOB
 #define LD_G_Pin GPIO_PIN_8
 #define LD_G_GPIO_Port GPIOE
-#define PS2_CLOCK_Pin GPIO_PIN_8
-#define PS2_CLOCK_GPIO_Port GPIOA
-#define PS2_CLOCK_EXTI_IRQn EXTI9_5_IRQn
-#define PS2_DATA_Pin GPIO_PIN_9
-#define PS2_DATA_GPIO_Port GPIOA
+#define PS2_CLOCK_Pin GPIO_PIN_11
+#define PS2_CLOCK_GPIO_Port GPIOE
+#define PS2_CLOCK_EXTI_IRQn EXTI15_10_IRQn
+#define PS2_DATA_Pin GPIO_PIN_13
+#define PS2_DATA_GPIO_Port GPIOE
 #define OTG_FS_DM_Pin GPIO_PIN_11
 #define OTG_FS_DM_GPIO_Port GPIOA
 #define OTG_FS_DP_Pin GPIO_PIN_12

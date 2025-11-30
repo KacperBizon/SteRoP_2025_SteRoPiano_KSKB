@@ -126,6 +126,10 @@ float odeToJoy[] = {
 
 int melody_len = 15;
 
+volatile uint8_t ps2_bit_count = 0;
+volatile uint8_t ps2_scancode = 0;
+volatile uint8_t ps2_flag = 0;
+
 
 /* USER CODE END PV */
 
@@ -215,33 +219,38 @@ int main(void)
 
   while (1)
   {
-	BSP_LED_Toggle(LED5); //BSP_LED_Toggle(LED5); // miganie zielona dioda - program dziala poprawnie
+	BSP_LED_Toggle(LED5); // miganie zielona dioda - program dziala poprawnie
 	GenerateSoundToBuffer();
 
 	uint32_t current_time = HAL_GetTick();
 	uint32_t time_diff = current_time - last_note_time;
-	uint32_t wait_time = 400;
+	uint32_t wait_time;
+	wait_time = (melody_step >= melody_len) ? 2000 : 400;
 
+	if(ps2_flag == 1)
+	{
+		ps2_flag = 0;
+		printf("PS2\r\n");
+	}
+
+	// JOY_CENTER przycisk
 	if (time_diff >= wait_time)
 	{
 		if (HAL_GPIO_ReadPin(JOY_CENTER_GPIO_Port, JOY_CENTER_Pin) == GPIO_PIN_SET)
 		{
-			printf("JOY_CENTER Pressed!\r\n");
+			printf("JOY_CENTER\r\n");
 		}
 	}
 
-
-	// granie Ode To Joy
-	if (melody_step >= melody_len) {
-	  wait_time = 2000;
-	}
-
+	// granie Ode to Joy
 	if (time_diff >= wait_time)
 	{
 	  if (melody_step < melody_len) {
 		  PlayNote(odeToJoy[melody_step]);
 		  melody_step++;
-	  } else {
+	  }
+	  else
+	  {
 		  melody_step = 0;
 	  }
 
@@ -502,6 +511,41 @@ void NextSound(int16_t *out_left, int16_t *out_right)
 int _write(int file, char *ptr, int len){
 	HAL_UART_Transmit(&huart2, (uint8_t *)ptr, len, 50);
 	return len;
+}
+
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+    // PS2 interrupt
+    if(GPIO_Pin == PS2_CLOCK_Pin)
+    {
+        int data_bit = HAL_GPIO_ReadPin(PS2_DATA_GPIO_Port, PS2_DATA_Pin);
+
+        // 2. PS/2 Protocol: 1 Start, 8 Data, 1 Parity, 1 Stop (11 bits total)
+        if (ps2_bit_count > 0 && ps2_bit_count < 9)
+        {
+            if (data_bit)
+            {
+                ps2_scancode |= (1 << (ps2_bit_count - 1));
+            }
+            else
+            {
+                ps2_scancode &= ~(1 << (ps2_bit_count - 1));
+            }
+        }
+        // start bit
+        else if (ps2_bit_count == 0)
+        {
+            ps2_scancode = 0;
+        }
+
+        ps2_bit_count++;
+
+        if (ps2_bit_count >= 11)
+        {
+            ps2_bit_count = 0;
+            ps2_flag = 1;
+        }
+    }
 }
 
 /* USER CODE END 4 */
