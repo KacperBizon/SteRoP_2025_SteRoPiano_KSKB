@@ -129,6 +129,7 @@ int melody_len = 15;
 volatile uint8_t ps2_bit_count = 0;
 volatile uint8_t ps2_scancode = 0;
 volatile uint8_t ps2_flag = 0;
+volatile uint32_t last_ps2_tick;
 
 
 /* USER CODE END PV */
@@ -139,9 +140,14 @@ void PeriphCommonClock_Config(void);
 /* USER CODE BEGIN PFP */
 
 static void Playback_Init(void); // prototyp funkcji do inicjalizacji audio
+void Load_Audio();
 void GenerateSoundToBuffer(void); // prototyp funkcji generujacej dzwieki
 void PlayNote(float freq); // funkcja wywolujaca nowa nute
+void Play3Notes(void);
 void NextSound(int16_t *out_left, int16_t *out_right);
+void PlayOdeToJoy(void);
+char PS2ToChar(uint8_t scancode);
+uint8_t IsButtonPressed();
 
 /* USER CODE END PFP */
 
@@ -194,23 +200,9 @@ int main(void)
   /* USER CODE BEGIN 2 */
 
   BSP_LED_Init(LED5); // inicjalizacja led
-  Playback_Init(); //inicjalizacja audio
+  Playback_Init(); // inicjalizacja audio
 
-  for(int i=0; i < PLAY_BUFF_SIZE; i+=2) // wypelnienie bufora danymi z pliku
-  {
-    PlayBuff[i/2] = *((__IO uint16_t *)(AUDIO_FILE_ADDRESS + PLAY_HEADER + i));
-  }
-
-  if(0 != audio_drv->Play(AUDIO_I2C_ADDRESS, NULL, 0)) // sprawdzenie czy AUDIO_I2C_ADDRESS zdefiniowane w BSP
-  {
-    Error_Handler();
-  }
-
-
-  if(HAL_OK != HAL_SAI_Transmit_DMA(&hsai_BlockA1, (uint8_t *)PlayBuff, PLAY_BUFF_SIZE)) // sprawdzenie czy DMA uruchomione poprawnie
-  {
-    Error_Handler();
-  }
+  Load_Audio();
 
   /* USER CODE END 2 */
 
@@ -220,81 +212,39 @@ int main(void)
   while (1)
   {
 	BSP_LED_Toggle(LED5); // miganie zielona dioda - program dziala poprawnie
-	GenerateSoundToBuffer();
 
 	uint32_t current_time = HAL_GetTick();
 	uint32_t time_diff = current_time - last_note_time;
 	uint32_t wait_time;
-	wait_time = (melody_step >= melody_len) ? 2000 : 400;
+
 
 	if(ps2_flag == 1)
 	{
 		ps2_flag = 0;
-		printf("PS2\r\n");
+		char note = PS2ToChar(ps2_scancode);
+
+		if(note != 0)
+			printf("%c\r\n", note);
 	}
 
-	// JOY_CENTER przycisk
+	wait_time = (melody_step >= melody_len) ? 2000 : 400;
 	if (time_diff >= wait_time)
 	{
-		if (HAL_GPIO_ReadPin(JOY_CENTER_GPIO_Port, JOY_CENTER_Pin) == GPIO_PIN_SET)
-		{
-			printf("JOY_CENTER\r\n");
-		}
+		// niebieski JOY_CENTER
+		if(IsButtonPressed())
+			printf("JOY CENTER nacisniety \r\n");
+
+		//granie Ode To Joy
+		PlayOdeToJoy();
+
+		//przyklad akordu
+		//Play3Notes();
+
+		last_note_time = current_time;
 	}
 
-	// granie Ode to Joy
-	if (time_diff >= wait_time)
-	{
-	  if (melody_step < melody_len) {
-		  PlayNote(odeToJoy[melody_step]);
-		  melody_step++;
-	  }
-	  else
-	  {
-		  melody_step = 0;
-	  }
-
-	  last_note_time = current_time;
-	}
-// granie MAX_KEYS nut na raz
-//	    if (HAL_GetTick() - last_note_time > 400)
-//	    {
-//	        PlayNote(scale[melody_step]);
-//
-//	        melody_step++;
-//	        if (melody_step >= 8) melody_step = 0;
-//
-//	        last_note_time = HAL_GetTick();
-
-//	    	PlayNote(NOTE_C4);
-//	    	PlayNote(NOTE_F4);
-//	    	PlayNote(NOTE_C5);
-//
-//	    	BSP_LED_Toggle(LED5);
-//	    	last_note_time = HAL_GetTick();
-//	    }
-
-// granie muzyki z pliku
-//	    while(UpdatePointer == -1) //sprawdzenie czy transfer DMA w porzadku
-//	    {
-//	        // HAL_PWR_EnterSLEEPMode(PWR_MAINREGULATOR_ON, PWR_SLEEPENTRY_WFI);
-//	    }
-//
-//	    int position = UpdatePointer; // sprawdzenie ktora polowa bufora wolna (0 lub PLAY_BUFF_SIZE/2)
-//	    UpdatePointer = -1; // reset flagi
-//
-//	    for(int i = 0; i < PLAY_BUFF_SIZE/2; i++) // uzupelnienie wolnej polowy bufora danymi
-//	    {
-//	    	// odczyt danych z flash
-//	        PlayBuff[i + position] = *((__IO uint16_t *)(AUDIO_FILE_ADDRESS + PlaybackPosition));
-//	        PlaybackPosition += 2; // przesuniecie adresu o 2 bajty (bo uint16, a nie 8)
-//	    }
-//
-//	    // sprawdzenie, czy koniec danych
-//	    if((PlaybackPosition + (PLAY_BUFF_SIZE)) > AUDIO_FILE_SIZE) // jesli nastepna operacja przekroczy rozmiar pliku
-//	    {
-//	        PlaybackPosition = PLAY_HEADER; // wraca na poczatek pliku
-//	    }
+	// granie muzyki do bufora
+	GenerateSoundToBuffer();
 
     /* USER CODE END WHILE */
 
@@ -400,6 +350,25 @@ static void Playback_Init(void) // funkcja odpowiedzialna za przetwarzanie audio
   }
 }
 
+void Load_Audio(void)
+{
+	  for(int i=0; i < PLAY_BUFF_SIZE; i+=2) // wypelnienie bufora danymi z pliku
+	  {
+	    PlayBuff[i/2] = *((__IO uint16_t *)(AUDIO_FILE_ADDRESS + PLAY_HEADER + i));
+	  }
+
+	  if(0 != audio_drv->Play(AUDIO_I2C_ADDRESS, NULL, 0)) // sprawdzenie czy AUDIO_I2C_ADDRESS zdefiniowane w BSP
+	  {
+	    Error_Handler();
+	  }
+
+
+	  if(HAL_OK != HAL_SAI_Transmit_DMA(&hsai_BlockA1, (uint8_t *)PlayBuff, PLAY_BUFF_SIZE)) // sprawdzenie czy DMA uruchomione poprawnie
+	  {
+	    Error_Handler();
+	  }
+}
+
 void GenerateSoundToBuffer(void)
 {
     while (UpdatePointer == -1) { } // obsluga buforowania
@@ -415,29 +384,6 @@ void GenerateSoundToBuffer(void)
          PlayBuff[pos + i]     = sample_left; // zapis do bufora
          PlayBuff[pos + i + 1] = sample_right;
     }
-}
-
-void PlayNote(float freq)
-{
-	static int last = 0; // zapamietanie ostatiego wykorzystanego indeksu tablicy
-	int empty = -1; // indeks niewykorzystanego klawisza (szukany)
-	for (int i = 0; i < MAX_KEYS; i++){
-		int idx = (last + 1 + i) % MAX_KEYS; // zaczyna przeszukiwanie od ostatniego zapisanego
-		if (keys[idx].flag == 0){ // jak znajdzie pusty
-			empty = idx; // to zapisuje do dalszego uzycia
-			break;
-		}
-	}
-	if (empty == -1) // a jak nie znajdzie
-		empty = (last + 1) % MAX_KEYS; // to nadpisuje nastepny po tym ostatnio uzytym
-
-	last = empty;
-
-	keys[empty].flag = 1;
-    keys[empty].freq = freq;
-    keys[empty].t = 0.0f;
-    keys[empty].phase = 0.0f;
-    keys[empty].phase_detune = 0.0f;
 }
 
 void NextSound(int16_t *out_left, int16_t *out_right)
@@ -508,6 +454,55 @@ void NextSound(int16_t *out_left, int16_t *out_right)
     *out_right = (int16_t)(amplitude * mixed_right);
 }
 
+void PlayNote(float freq)
+{
+	static int last = 0; // zapamietanie ostatiego wykorzystanego indeksu tablicy
+	int empty = -1; // indeks niewykorzystanego klawisza (szukany)
+	for (int i = 0; i < MAX_KEYS; i++){
+		int idx = (last + 1 + i) % MAX_KEYS; // zaczyna przeszukiwanie od ostatniego zapisanego
+		if (keys[idx].flag == 0){ // jak znajdzie pusty
+			empty = idx; // to zapisuje do dalszego uzycia
+			break;
+		}
+	}
+	if (empty == -1) // a jak nie znajdzie
+		empty = (last + 1) % MAX_KEYS; // to nadpisuje nastepny po tym ostatnio uzytym
+
+	last = empty;
+
+	keys[empty].flag = 1;
+    keys[empty].freq = freq;
+    keys[empty].t = 0.0f;
+    keys[empty].phase = 0.0f;
+    keys[empty].phase_detune = 0.0f;
+}
+
+void Play3Notes(void)
+{
+	if (melody_step >= melody_len)
+	{
+		melody_step = 0;
+	}
+
+	PlayNote(NOTE_C4);
+	PlayNote(NOTE_F4);
+	PlayNote(NOTE_C5);
+
+	melody_step++;
+}
+
+void PlayOdeToJoy(void)
+{
+	if (melody_step >= melody_len)
+	{
+		melody_step = 0;
+	}
+
+	PlayNote(odeToJoy[melody_step]);
+
+	melody_step++;
+}
+
 int _write(int file, char *ptr, int len){
 	HAL_UART_Transmit(&huart2, (uint8_t *)ptr, len, 50);
 	return len;
@@ -518,7 +513,15 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
     // PS2 interrupt
     if(GPIO_Pin == PS2_CLOCK_Pin)
     {
-        int data_bit = HAL_GPIO_ReadPin(PS2_DATA_GPIO_Port, PS2_DATA_Pin);
+    	int data_bit = HAL_GPIO_ReadPin(PS2_DATA_GPIO_Port, PS2_DATA_Pin);
+
+//    	uint32_t current_tick = HAL_GetTick();
+//		if (current_tick - last_ps2_tick > 5)
+//		{
+//			ps2_bit_count = 0;
+//			ps2_scancode = 0;
+//		}
+//		last_ps2_tick = current_tick;
 
         // 2. PS/2 Protocol: 1 Start, 8 Data, 1 Parity, 1 Stop (11 bits total)
         if (ps2_bit_count > 0 && ps2_bit_count < 9)
@@ -548,6 +551,73 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
     }
 }
 
+char PS2ToChar(uint8_t scancode)
+{
+    switch(scancode) {
+        case 0x1C: return 'A';
+        case 0x32: return 'B';
+        case 0x21: return 'C';
+        case 0x23: return 'D';
+        case 0x24: return 'E';
+        case 0x2B: return 'F';
+        case 0x34: return 'G';
+        case 0x33: return 'H';
+        case 0x43: return 'I';
+        case 0x3B: return 'J';
+        case 0x42: return 'K';
+        case 0x4B: return 'L';
+        case 0x3A: return 'M';
+        case 0x31: return 'N';
+        case 0x44: return 'O';
+        case 0x4D: return 'P';
+        case 0x15: return 'Q';
+        case 0x2D: return 'R';
+        case 0x1B: return 'S';
+        case 0x2C: return 'T';
+        case 0x3C: return 'U';
+        case 0x2A: return 'V';
+        case 0x1D: return 'W';
+        case 0x22: return 'X';
+        case 0x35: return 'Y';
+        case 0x1A: return 'Z';
+
+        case 0x16: return '1';
+        case 0x1E: return '2';
+        case 0x26: return '3';
+        case 0x25: return '4';
+        case 0x2E: return '5';
+        case 0x36: return '6';
+        case 0x3D: return '7';
+        case 0x3E: return '8';
+        case 0x46: return '9';
+        case 0x45: return '0';
+
+        case 0x54: return '[';
+		case 0x5B: return ']';
+		case 0x4C: return ';';
+		case 0x52: return '\'';
+		case 0x41: return ',';
+		case 0x49: return '.';
+		case 0x4A: return '/';
+		case 0x4E: return '-';
+		case 0x55: return '=';
+		case 0x5D: return '\\';
+
+        case 0x29: return ' ';
+        case 0x5A: return '\r';
+        case 0x66: return '\b';
+
+        default: return 0; // 0xF0...
+    }
+}
+
+uint8_t IsButtonPressed()
+{
+	if (HAL_GPIO_ReadPin(JOY_CENTER_GPIO_Port, JOY_CENTER_Pin) == GPIO_PIN_SET)
+		return 1;
+
+	return 0;
+}
 /* USER CODE END 4 */
 
 /**
