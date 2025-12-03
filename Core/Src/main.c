@@ -129,8 +129,6 @@ int melody_len = 15;
 volatile uint8_t ps2_bit_count = 0;
 volatile uint8_t ps2_scancode = 0;
 volatile uint8_t ps2_flag = 0;
-volatile uint32_t last_ps2_tick;
-
 
 /* USER CODE END PV */
 
@@ -146,7 +144,10 @@ void PlayNote(float freq); // funkcja wywolujaca nowa nute
 void Play3Notes(void);
 void NextSound(int16_t *out_left, int16_t *out_right);
 void PlayOdeToJoy(void);
+void ps2WatchDog(void);
+uint8_t readPS2(int data_bit);
 char PS2ToChar(uint8_t scancode);
+float PS2ToNote(uint8_t scancode);
 uint8_t IsButtonPressed();
 
 /* USER CODE END PFP */
@@ -221,8 +222,10 @@ int main(void)
 	if(ps2_flag == 1)
 	{
 		ps2_flag = 0;
-		char note = PS2ToChar(ps2_scancode);
 
+		PlayNote(PS2ToNote(ps2_scancode));
+
+		char note = PS2ToChar(ps2_scancode);
 		if(note != 0)
 			printf("%c\r\n", note);
 	}
@@ -235,7 +238,7 @@ int main(void)
 			printf("JOY CENTER nacisniety \r\n");
 
 		//granie Ode To Joy
-		PlayOdeToJoy();
+		//PlayOdeToJoy();
 
 		//przyklad akordu
 		//Play3Notes();
@@ -513,86 +516,116 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
     // PS2 interrupt
     if(GPIO_Pin == PS2_CLOCK_Pin)
     {
+    	ps2WatchDog();
+
     	int data_bit = HAL_GPIO_ReadPin(PS2_DATA_GPIO_Port, PS2_DATA_Pin);
 
-//    	uint32_t current_tick = HAL_GetTick();
-//		if (current_tick - last_ps2_tick > 5)
-//		{
-//			ps2_bit_count = 0;
-//			ps2_scancode = 0;
-//		}
-//		last_ps2_tick = current_tick;
-
-        // 2. PS/2 Protocol: 1 Start, 8 Data, 1 Parity, 1 Stop (11 bits total)
-        if (ps2_bit_count > 0 && ps2_bit_count < 9)
-        {
-            if (data_bit)
-            {
-                ps2_scancode |= (1 << (ps2_bit_count - 1));
-            }
-            else
-            {
-                ps2_scancode &= ~(1 << (ps2_bit_count - 1));
-            }
-        }
-        // start bit
-        else if (ps2_bit_count == 0)
-        {
-            ps2_scancode = 0;
-        }
-
-        ps2_bit_count++;
-
-        if (ps2_bit_count >= 11)
-        {
-            ps2_bit_count = 0;
-            ps2_flag = 1;
-        }
+    	if(readPS2(data_bit) == 1)
+        	ps2_flag = 1;
     }
+}
+
+void ps2WatchDog()
+{
+	static uint32_t last_ps2_tick = 0;
+	uint32_t current_tick = HAL_GetTick();
+
+	if (current_tick - last_ps2_tick > 5)
+	{
+		ps2_bit_count = 0;
+		ps2_scancode = 0;
+	}
+	last_ps2_tick = current_tick;
+}
+
+uint8_t readPS2(int data_bit)
+{
+	static uint8_t ignore_next_code = 0;
+
+    // 2. PS/2 Protocol: 1 Start, 8 Data, 1 Parity, 1 Stop (11 bits total)
+    if (ps2_bit_count > 0 && ps2_bit_count < 9)
+    {
+        if (data_bit)
+        {
+            ps2_scancode |= (1 << (ps2_bit_count - 1));
+        }
+//            else
+//            {
+//                ps2_scancode &= ~(1 << (ps2_bit_count - 1));
+//            }
+    }
+    // start bit
+    else if (ps2_bit_count == 0)
+    {
+        ps2_scancode = 0;
+    }
+
+    ps2_bit_count++;
+
+    if (ps2_bit_count >= 11)
+    {
+    	ps2_bit_count = 0;
+
+    	if(ignore_next_code)
+    	{
+    		ignore_next_code = 0;
+    		return 0;
+    	}
+
+    	if(ps2_scancode == 0xF0)
+    	{
+    		ignore_next_code = 1;
+    		return 0;
+    	}
+
+    	return 1;
+    }
+
+    return 0;
 }
 
 char PS2ToChar(uint8_t scancode)
 {
     switch(scancode) {
-        case 0x1C: return 'A';
-        case 0x32: return 'B';
-        case 0x21: return 'C';
-        case 0x23: return 'D';
-        case 0x24: return 'E';
-        case 0x2B: return 'F';
-        case 0x34: return 'G';
-        case 0x33: return 'H';
-        case 0x43: return 'I';
-        case 0x3B: return 'J';
-        case 0x42: return 'K';
-        case 0x4B: return 'L';
-        case 0x3A: return 'M';
-        case 0x31: return 'N';
-        case 0x44: return 'O';
-        case 0x4D: return 'P';
-        case 0x15: return 'Q';
-        case 0x2D: return 'R';
-        case 0x1B: return 'S';
-        case 0x2C: return 'T';
-        case 0x3C: return 'U';
-        case 0x2A: return 'V';
-        case 0x1D: return 'W';
-        case 0x22: return 'X';
-        case 0x35: return 'Y';
-        case 0x1A: return 'Z';
+		case 0x1C: return 'A';
+		case 0x32: return 'B';
+		case 0x21: return 'C';
+		case 0x23: return 'D';
+		case 0x24: return 'E';
+		case 0x2B: return 'F';
+		case 0x34: return 'G';
+		case 0x33: return 'H';
+		case 0x43: return 'I';
+		case 0x3B: return 'J';
+		case 0x42: return 'K';
+		case 0x4B: return 'L';
+		case 0x3A: return 'M';
+		case 0x31: return 'N';
+		case 0x44: return 'O';
+		case 0x4D: return 'P';
+		case 0x15: return 'Q';
+		case 0x2D: return 'R';
+		case 0x1B: return 'S';
+		case 0x2C: return 'T';
+		case 0x3C: return 'U';
+		case 0x2A: return 'V';
+		case 0x1D: return 'W';
+		case 0x22: return 'X';
+		case 0x35: return 'Y';
+		case 0x1A: return 'Z';
 
-        case 0x16: return '1';
-        case 0x1E: return '2';
-        case 0x26: return '3';
-        case 0x25: return '4';
-        case 0x2E: return '5';
-        case 0x36: return '6';
-        case 0x3D: return '7';
-        case 0x3E: return '8';
-        case 0x46: return '9';
-        case 0x45: return '0';
+		case 0x16: return '1';
+		case 0x1E: return '2';
+		case 0x26: return '3';
+		case 0x25: return '4';
+		case 0x2E: return '5';
+		case 0x36: return '6';
+		case 0x3D: return '7';
+		case 0x3E: return '8';
+		case 0x46: return '9';
+		case 0x45: return '0';
 
-        case 0x54: return '[';
+		case 0x54: return '[';
 		case 0x5B: return ']';
 		case 0x4C: return ';';
 		case 0x52: return '\'';
@@ -603,11 +636,36 @@ char PS2ToChar(uint8_t scancode)
 		case 0x55: return '=';
 		case 0x5D: return '\\';
 
-        case 0x29: return ' ';
-        case 0x5A: return '\r';
-        case 0x66: return '\b';
+		case 0x29: return ' ';
+		case 0x5A: return '\r';
+		case 0x66: return '\b';
 
-        default: return 0; // 0xF0...
+		default: return 0; // 0xF0...
+    }
+}
+
+float PS2ToNote(uint8_t scancode)
+{
+    switch(scancode) {
+    	//W-I
+		case 0x1D: return NOTE_C3;
+		case 0x24: return NOTE_D3;
+		case 0x2D: return NOTE_E3;
+		case 0x2C: return NOTE_F3;
+		case 0x35: return NOTE_G3;
+		case 0x3C: return NOTE_A3;
+		case 0x43: return NOTE_B3;
+
+		//S-K
+		case 0x1B: return NOTE_C4;
+		case 0x23: return NOTE_D4;
+		case 0x2B: return NOTE_E4;
+		case 0x34: return NOTE_F4;
+		case 0x33: return NOTE_G4;
+		case 0x3B: return NOTE_A4;
+		case 0x42: return NOTE_B4;
+
+		default: return 0; // 0xF0...
     }
 }
 
