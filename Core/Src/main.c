@@ -76,8 +76,10 @@
 #define NOTE_A5  880.00f
 #define NOTE_B5  987.77f
 
+// maximum number of notes played
 #define MAX_KEYS 3
 
+#define BUFFER_KEYS 4
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -128,7 +130,11 @@ int melody_len = 15;
 
 volatile uint8_t ps2_bit_count = 0;
 volatile uint8_t ps2_scancode = 0;
-volatile uint8_t ps2_flag = 0;
+
+volatile uint8_t ps2_queue[BUFFER_KEYS];
+volatile uint8_t ps2_q_head = 0;
+volatile uint8_t ps2_q_tail = 0;
+
 
 /* USER CODE END PV */
 
@@ -145,6 +151,8 @@ void Play3Notes(void);
 void NextSound(int16_t *out_left, int16_t *out_right);
 void PlayOdeToJoy(void);
 void ps2WatchDog(void);
+void PS2_QueuePush(uint8_t code);
+uint8_t PS2_QueuePop(uint8_t *out);
 uint8_t readPS2(int data_bit);
 char PS2ToChar(uint8_t scancode);
 float PS2ToNote(uint8_t scancode);
@@ -218,14 +226,13 @@ int main(void)
 	uint32_t time_diff = current_time - last_note_time;
 	uint32_t wait_time;
 
+	uint8_t code;
 
-	if(ps2_flag == 1)
+	while(PS2_QueuePop(&code))
 	{
-		ps2_flag = 0;
+		PlayNote(PS2ToNote(code));
 
-		PlayNote(PS2ToNote(ps2_scancode));
-
-		char note = PS2ToChar(ps2_scancode);
+		char note = PS2ToChar(code);
 		if(note != 0)
 			printf("%c\r\n", note);
 	}
@@ -521,7 +528,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
     	int data_bit = HAL_GPIO_ReadPin(PS2_DATA_GPIO_Port, PS2_DATA_Pin);
 
     	if(readPS2(data_bit) == 1)
-        	ps2_flag = 1;
+            PS2_QueuePush(ps2_scancode);
     }
 }
 
@@ -549,10 +556,6 @@ uint8_t readPS2(int data_bit)
         {
             ps2_scancode |= (1 << (ps2_bit_count - 1));
         }
-//            else
-//            {
-//                ps2_scancode &= ~(1 << (ps2_bit_count - 1));
-//            }
     }
     // start bit
     else if (ps2_bit_count == 0)
@@ -583,6 +586,28 @@ uint8_t readPS2(int data_bit)
 
     return 0;
 }
+
+void PS2_QueuePush(uint8_t code)
+{
+    uint8_t next = (ps2_q_head + 1) % (BUFFER_KEYS);
+
+    if (next == ps2_q_tail)
+        return;
+
+    ps2_queue[ps2_q_head] = code;
+    ps2_q_head = next;
+}
+
+uint8_t PS2_QueuePop(uint8_t *out)
+{
+    if (ps2_q_tail == ps2_q_head)
+        return 0;
+
+    *out = ps2_queue[ps2_q_tail];
+    ps2_q_tail = (ps2_q_tail + 1) % (BUFFER_KEYS);
+    return 1;
+}
+
 
 char PS2ToChar(uint8_t scancode)
 {
