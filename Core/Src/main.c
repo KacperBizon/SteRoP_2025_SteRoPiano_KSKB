@@ -49,6 +49,15 @@
 #define PLAY_HEADER          0x2C       // rozmiar naglowka wav
 #define PLAY_BUFF_SIZE       4096       // rozmiar bufora
 
+// nuty - oktawa 2
+#define NOTE_C2  65.41f
+#define NOTE_D2  73.42f
+#define NOTE_E2  82.41f
+#define NOTE_F2  87.31f
+#define NOTE_G2  98.00f
+#define NOTE_A2  110.00f
+#define NOTE_B2  123.47f
+
 // nuty - oktawa 3
 #define NOTE_C3  130.81f
 #define NOTE_D3  146.83f
@@ -67,14 +76,6 @@
 #define NOTE_A4  440.00f
 #define NOTE_B4  493.88f
 
-// nuty - oktawa 5
-#define NOTE_C5  523.25f
-#define NOTE_D5  587.33f
-#define NOTE_E5  659.26f
-#define NOTE_F5  698.46f
-#define NOTE_G5  783.99f
-#define NOTE_A5  880.00f
-#define NOTE_B5  987.77f
 
 // maximum number of notes played
 #define MAX_KEYS 3
@@ -100,7 +101,7 @@ __IO int16_t      UpdatePointer = -1;       // flaga do sprawdzania, czy transmi
 
 
 // podstawowa oktawa do testow
-float scale[] = { NOTE_C4, NOTE_D4, NOTE_E4, NOTE_F4, NOTE_G4, NOTE_A4, NOTE_B4, NOTE_C5 };
+float scale[] = { NOTE_C4, NOTE_D4, NOTE_E4, NOTE_F4, NOTE_G4, NOTE_A4, NOTE_B4};
 
 
 typedef struct {
@@ -322,9 +323,9 @@ void PeriphCommonClock_Config(void)
   PeriphClkInit.UsbClockSelection = RCC_USBCLKSOURCE_PLLSAI1;
   PeriphClkInit.PLLSAI1.PLLSAI1Source = RCC_PLLSOURCE_MSI;
   PeriphClkInit.PLLSAI1.PLLSAI1M = 1;
-  PeriphClkInit.PLLSAI1.PLLSAI1N = 24;
+  PeriphClkInit.PLLSAI1.PLLSAI1N = 48;
   PeriphClkInit.PLLSAI1.PLLSAI1P = RCC_PLLP_DIV17;
-  PeriphClkInit.PLLSAI1.PLLSAI1Q = RCC_PLLQ_DIV2;
+  PeriphClkInit.PLLSAI1.PLLSAI1Q = RCC_PLLQ_DIV4;
   PeriphClkInit.PLLSAI1.PLLSAI1R = RCC_PLLR_DIV2;
   PeriphClkInit.PLLSAI1.PLLSAI1ClockOut = RCC_PLLSAI1_SAI1CLK|RCC_PLLSAI1_48M2CLK;
   if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
@@ -484,7 +485,7 @@ void Play3Notes(void)
 
 	PlayNote(NOTE_C4);
 	PlayNote(NOTE_F4);
-	PlayNote(NOTE_C5);
+	PlayNote(NOTE_C3);
 
 	melody_step++;
 }
@@ -645,36 +646,36 @@ char PS2ToChar(uint8_t scancode)
 
 float PS2ToNote(uint8_t scancode)
 {
-    switch(scancode) {
-    	//W-I
-		case 0x1D: return NOTE_C3;
-		case 0x24: return NOTE_D3;
-		case 0x2D: return NOTE_E3;
-		case 0x2C: return NOTE_F3;
-		case 0x35: return NOTE_G3;
-		case 0x3C: return NOTE_A3;
-		case 0x43: return NOTE_B3;
+	switch(scancode) {
+	        //(W..I) - TERAZ OKTAWA 2
+	        case 0x1D: return NOTE_C2; // W
+	        case 0x24: return NOTE_D2; // E
+	        case 0x2D: return NOTE_E2; // R
+	        case 0x2C: return NOTE_F2; // T
+	        case 0x35: return NOTE_G2; // Y
+	        case 0x3C: return NOTE_A2; // U
+	        case 0x43: return NOTE_B2; // I
 
-		//S-K
-		case 0x1B: return NOTE_C4;
-		case 0x23: return NOTE_D4;
-		case 0x2B: return NOTE_E4;
-		case 0x34: return NOTE_F4;
-		case 0x33: return NOTE_G4;
-		case 0x3B: return NOTE_A4;
-		case 0x42: return NOTE_B4;
+	        //(S..K) - OKTAWA 3
+	        case 0x1B: return NOTE_C3; // S
+	        case 0x23: return NOTE_D3; // D
+	        case 0x2B: return NOTE_E3; // F
+	        case 0x34: return NOTE_F3; // G
+	        case 0x33: return NOTE_G3; // H
+	        case 0x3B: return NOTE_A3; // J
+	        case 0x42: return NOTE_B3; // K
 
-		//X-<
-		case 0x22: return NOTE_C5;
-		case 0x21: return NOTE_D5;
-	    case 0x2A: return NOTE_E5;
-		case 0x32: return NOTE_F5;
-		case 0x31: return NOTE_G5;
-		case 0x3A: return NOTE_A5;
-		case 0x41: return NOTE_B5;
+	        //  (X..<) - OKTAWA 4
+	        case 0x22: return NOTE_C4; // X
+	        case 0x21: return NOTE_D4; // C
+	        case 0x2A: return NOTE_E4; // V
+	        case 0x32: return NOTE_F4; // B
+	        case 0x31: return NOTE_G4; // N
+	        case 0x3A: return NOTE_A4; // M
+	        case 0x41: return NOTE_B4; // , (<)
 
-		default: return 0; // 0xF0...
-    }
+	        default: return 0; // 0xF0...
+	    }
 }
 
 uint8_t IsButtonPressed()
@@ -716,6 +717,7 @@ void ProcessPS2Events(void)
         }
     }
 }
+
 
 /* USER CODE END 4 */
 
