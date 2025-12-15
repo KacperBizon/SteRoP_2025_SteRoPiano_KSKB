@@ -79,7 +79,7 @@
 // maximum number of notes played
 #define MAX_KEYS 3
 
-#define BUFFER_KEYS 4
+#define BUFFER_KEYS 12
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -109,6 +109,7 @@ typedef struct {
     volatile float t;				// czas trwania
     volatile float phase;			// faza fali
     volatile float phase_detune;	// faza rozstrojenia
+    float volume_factor;			// glosnosc
 } PianoKey;
 
 PianoKey keys[MAX_KEYS]; 			// tablica grajacych klawiszy (dzwiekow) pianina
@@ -135,6 +136,7 @@ volatile uint8_t ps2_queue[BUFFER_KEYS];
 volatile uint8_t ps2_q_head = 0;
 volatile uint8_t ps2_q_tail = 0;
 
+uint8_t key_active[256] = {0};
 
 /* USER CODE END PV */
 
@@ -157,6 +159,7 @@ uint8_t readPS2(int data_bit);
 char PS2ToChar(uint8_t scancode);
 float PS2ToNote(uint8_t scancode);
 uint8_t IsButtonPressed();
+void ProcessPS2Events(void);
 
 /* USER CODE END PFP */
 
@@ -226,16 +229,7 @@ int main(void)
 	uint32_t time_diff = current_time - last_note_time;
 	uint32_t wait_time;
 
-	uint8_t code;
-
-	while(PS2_QueuePop(&code))
-	{
-		PlayNote(PS2ToNote(code));
-
-		char note = PS2ToChar(code);
-		if(note != 0)
-			printf("%c\r\n", note);
-	}
+	ProcessPS2Events();
 
 	wait_time = (melody_step >= melody_len) ? 2000 : 400;
 	if (time_diff >= wait_time)
@@ -354,7 +348,7 @@ static void Playback_Init(void) // funkcja odpowiedzialna za przetwarzanie audio
   audio_drv->Reset(AUDIO_I2C_ADDRESS);	// zresetowanie drivera audio
 
   // konfiguracja adresow I2C, urzadzenia wyjsciowego, glosnosci i czestotliwosci
-  if(0 != audio_drv->Init(AUDIO_I2C_ADDRESS, OUTPUT_DEVICE_HEADPHONE, 80, AUDIO_FREQUENCY_44K)) //zmieniona czestotliwosc na 44k
+  if(0 != audio_drv->Init(AUDIO_I2C_ADDRESS, OUTPUT_DEVICE_HEADPHONE, 90, AUDIO_FREQUENCY_44K)) //zmieniona czestotliwosc na 44k
   {
     Error_Handler();
   }
@@ -362,21 +356,20 @@ static void Playback_Init(void) // funkcja odpowiedzialna za przetwarzanie audio
 
 void Load_Audio(void)
 {
-	  for(int i=0; i < PLAY_BUFF_SIZE; i+=2) // wypelnienie bufora danymi z pliku
-	  {
-	    PlayBuff[i/2] = *((__IO uint16_t *)(AUDIO_FILE_ADDRESS + PLAY_HEADER + i));
-	  }
+    for(int i=0; i < PLAY_BUFF_SIZE; i++)
+    {
+        PlayBuff[i] = 0; // wypelnienie bufora zerami
+    }
 
-	  if(0 != audio_drv->Play(AUDIO_I2C_ADDRESS, NULL, 0)) // sprawdzenie czy AUDIO_I2C_ADDRESS zdefiniowane w BSP
-	  {
-	    Error_Handler();
-	  }
+    if(0 != audio_drv->Play(AUDIO_I2C_ADDRESS, NULL, 0)) // uruchomienie drivera
+    {
+        Error_Handler();
+    }
 
-
-	  if(HAL_OK != HAL_SAI_Transmit_DMA(&hsai_BlockA1, (uint8_t *)PlayBuff, PLAY_BUFF_SIZE)) // sprawdzenie czy DMA uruchomione poprawnie
-	  {
-	    Error_Handler();
-	  }
+    if(HAL_OK != HAL_SAI_Transmit_DMA(&hsai_BlockA1, (uint8_t *)PlayBuff, PLAY_BUFF_SIZE)) // uruchomienie DMA
+    {
+        Error_Handler();
+    }
 }
 
 void GenerateSoundToBuffer(void)
@@ -399,92 +392,87 @@ void GenerateSoundToBuffer(void)
 void NextSound(int16_t *out_left, int16_t *out_right)
 {
     const float sample_rate = 44100.0f;
-    const float amplitude = 28000.0f / MAX_KEYS;
+    const float volume_scale = 6000.0f;
 
-    float mixed_left = 0.0f;
-    float mixed_right = 0.0f;
+    static float last_val_left = 0.0f;
+    static float last_val_right = 0.0f;
+
+    float mixed_sample = 0.0f;
 
     for (int i = 0; i < MAX_KEYS; i++)
     {
         if (!keys[i].flag) continue;
 
-        float t = keys[i].t;
+        float vol_intensify = 1.0f;
+        if (keys[i].t < 0.05f)
+            vol_intensify = keys[i].t / 0.05f; // narastanie glosniosci dzwieku na poczatku
 
-        if (t > 1.0f) {
-            keys[i].flag = 0;
+        float signal = sinf(keys[i].phase) + 0.5f * sinf(keys[i].phase * 2.0f); // charakterystyka aktualnego dzwieku (modulacja fm)
+
+        float vol_fade = (1.0f - keys[i].t);
+        if (vol_fade <= 0.0f) {
+            keys[i].flag = 0; // zanikanie glosnosci na koncu
             continue;
         }
 
-        float fm_intensity = 0.0f;
-        if (t < 0.1f)
-        	fm_intensity = 1.0f - (t * 10.0f); // odejmowanie zamiast liczenia eksponenty - odciazenie procesora
+        float current_vol = vol_intensify * (vol_fade * vol_fade); // glosnosc chwilowa
 
-        float phase = keys[i].phase;
+        current_vol *= keys[i].volume_factor; // korekcja czestotliwosci
 
-        float s1 = sinf(phase + fm_intensity * sinf(phase)); // charakterystyka aktualnego dzwieku (modulacja fm)
-        float s2 = sinf(keys[i].phase_detune); // rozstrojona struna w tle, dla realizmu
+        mixed_sample += signal * current_vol;
 
-        //float hammer = 0.0f; // imitacja uderzenia mloteczka w strune - dla realizmu
-        //if(t < 0.02f) // dziala tylko przez pierwsze 0,02s
-        	//hammer = 0.2f * sinf(t * 500.0f); // dzwiek o pol oktawy nizszy niz grana nuta
+        float phase_advance = tau * keys[i].freq / sample_rate; // aktualizacja fazy
+        keys[i].phase += phase_advance;
+        if (keys[i].phase >= tau) keys[i].phase -= tau;
 
-
-        float vol_fade = 1.0f - t;
-        if(vol_fade < 0.0f)
-        	vol_fade = 0.0f;
-
-        float mixed_signal = ((0.5f * s1 + 0.5f * s2) * vol_fade ) / MAX_KEYS; // finalny sygnal wyjsciowy
-
-        float stereo = 0.5f;
-        mixed_left += mixed_signal *(1.0f - stereo);
-        mixed_right += mixed_signal * stereo;
-
-        float freq = keys[i].freq;
-
-        float phase_advance = tau * freq / sample_rate; // krok zmiany fazy, 2pi*f/fs
-        float phase_advance_detune = phase_advance * 1.0015f; // analogicznie dla drugiej (minimalnie roztrojonej) struny
-
-        keys[i].phase += phase_advance; // przejscie do kolejnego kata fazy
-        if (keys[i].phase >= tau)
-        	keys[i].phase -= tau;
-        keys[i].phase_detune += phase_advance_detune;
-        if (keys[i].phase_detune >= tau)
-        	keys[i].phase_detune -= tau;
-
-        keys[i].t += 1.0f / sample_rate; // zanikanie dzwieku w czasie
+        keys[i].t += (1.0f / sample_rate) * 3.0f;
     }
 
-    if (mixed_left > 1.0f) mixed_left = 1.0f; // normowanie
-    if (mixed_left < -1.0f) mixed_left = -1.0f;
+    float raw_out = mixed_sample * volume_scale; // surowy sygnal wyjsciowy
 
-    if (mixed_right > 1.0f) mixed_right = 1.0f; // normowanie
-    if (mixed_right < -1.0f) mixed_right = -1.0f;
+    float filtered_left = 0.6f * raw_out + 0.4f * last_val_left; // nalozenie filtru IIR pierwszego rzedu, zeby wygladzic dzwiek
+    float filtered_right = 0.6f * raw_out + 0.4f * last_val_right; // czesc poprzedniego wyjscia jest dodawana na wejscie
 
-    *out_left  = (int16_t)(amplitude * mixed_left);
-    *out_right = (int16_t)(amplitude * mixed_right);
+    last_val_left = filtered_left;
+    last_val_right = filtered_right;
+
+    if (filtered_left > 32000.0f) filtered_left = 32000.0f; // normowanie
+    if (filtered_left < -32000.0f) filtered_left = -32000.0f;
+
+    *out_left = (int16_t)filtered_left;
+    *out_right = (int16_t)filtered_left;
 }
 
 void PlayNote(float freq)
 {
-	static int last = 0; // zapamietanie ostatiego wykorzystanego indeksu tablicy
-	int empty = -1; // indeks niewykorzystanego klawisza (szukany)
-	for (int i = 0; i < MAX_KEYS; i++){
-		int idx = (last + 1 + i) % MAX_KEYS; // zaczyna przeszukiwanie od ostatniego zapisanego
-		if (keys[idx].flag == 0){ // jak znajdzie pusty
-			empty = idx; // to zapisuje do dalszego uzycia
-			break;
-		}
-	}
-	if (empty == -1) // a jak nie znajdzie
-		empty = (last + 1) % MAX_KEYS; // to nadpisuje nastepny po tym ostatnio uzytym
+    for (int i = 0; i < MAX_KEYS; i++) {
+        if (keys[i].flag == 1 && fabsf(keys[i].freq - freq) < 0.1f) { // sprawdzenie czy nuta juz gra
+            keys[i].t = 0.0f; // jak tak, to resetuje czas trwania i faze
+            keys[i].phase = 0.0f;
+            return;
+        }
+    }
 
-	last = empty;
+    static int last = 0; // pamietana miedzy wywolaniami
+    int empty = -1;
 
-	keys[empty].flag = 1;
+    for (int i = 0; i < MAX_KEYS; i++){ // szukanie wolnego slota od ostatniego + 1
+        int idx = (last + 1 + i) % MAX_KEYS;
+        if (keys[idx].flag == 0){ // gdy znaleziono, to zapisuje jego indeks
+            empty = idx;
+            break;
+        }
+    }
+    if (empty == -1) empty = (last + 1) % MAX_KEYS; // jesli nie znalazl, to nadpisuje najstarszy
+    last = empty;
+
+    keys[empty].flag = 1; // uruchomienie nowej nuty
     keys[empty].freq = freq;
     keys[empty].t = 0.0f;
     keys[empty].phase = 0.0f;
     keys[empty].phase_detune = 0.0f;
+
+    keys[empty].volume_factor = 260.0f / (freq + 130.0f); // wyrownanie glosnosci, zeby wyeliminowac pisk wysokich nut
 }
 
 void Play3Notes(void)
@@ -547,9 +535,8 @@ void ps2WatchDog()
 
 uint8_t readPS2(int data_bit)
 {
-	static uint8_t ignore_next_code = 0;
 
-    // 2. PS/2 Protocol: 1 Start, 8 Data, 1 Parity, 1 Stop (11 bits total)
+    //  PS/2 Protocol: 1 Start, 8 Data, 1 Parity, 1 Stop (11 bits total)
     if (ps2_bit_count > 0 && ps2_bit_count < 9)
     {
         if (data_bit)
@@ -568,19 +555,6 @@ uint8_t readPS2(int data_bit)
     if (ps2_bit_count >= 11)
     {
     	ps2_bit_count = 0;
-
-    	if(ignore_next_code)
-    	{
-    		ignore_next_code = 0;
-    		return 0;
-    	}
-
-    	if(ps2_scancode == 0xF0)
-    	{
-    		ignore_next_code = 1;
-    		return 0;
-    	}
-
     	return 1;
     }
 
@@ -690,6 +664,15 @@ float PS2ToNote(uint8_t scancode)
 		case 0x3B: return NOTE_A4;
 		case 0x42: return NOTE_B4;
 
+		//X-<
+		case 0x22: return NOTE_C5;
+		case 0x21: return NOTE_D5;
+	    case 0x2A: return NOTE_E5;
+		case 0x32: return NOTE_F5;
+		case 0x31: return NOTE_G5;
+		case 0x3A: return NOTE_A5;
+		case 0x41: return NOTE_B5;
+
 		default: return 0; // 0xF0...
     }
 }
@@ -701,6 +684,39 @@ uint8_t IsButtonPressed()
 
 	return 0;
 }
+
+void ProcessPS2Events(void)
+{
+    uint8_t code;
+    static uint8_t next_is_break = 0; // pamieta miedzy wywolaniami
+
+    while(PS2_QueuePop(&code)) // pobranie wszystkich kodow z kolejki
+    {
+        if (code == 0xF0) // kod zwolnienia klawisza
+        {
+            next_is_break = 1;
+        }
+        else
+        {
+            if (next_is_break) // poprzedni bajt to bylo F0 wiec ten to kod puszczanego klawisza
+            {
+                key_active[code] = 0; // reset stanu i flagi
+                next_is_break = 0;
+            }
+            else // wcisniecie
+            {
+                if (key_active[code] == 0) // sprawdzenie czy wczesniej nie byl wcisniety
+                {
+                    key_active[code] = 1;
+                    PlayNote(PS2ToNote(code));
+                    char note = PS2ToChar(code); // drukowanie do debugowania
+                    if(note != 0) printf("%c\r\n", note);
+                }
+            }
+        }
+    }
+}
+
 /* USER CODE END 4 */
 
 /**
