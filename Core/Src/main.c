@@ -78,7 +78,7 @@
 
 
 // maximum number of notes played
-#define MAX_KEYS 3
+#define MAX_KEYS 6
 
 #define BUFFER_KEYS 12
 /* USER CODE END PD */
@@ -118,7 +118,7 @@ PianoKey keys[MAX_KEYS]; 			// tablica grajacych klawiszy (dzwiekow) pianina
 int melody_step = 0;
 uint32_t last_note_time = 0;
 
-float tau = 6.28318;
+float tau = 1.0f;
 
 float odeToJoy[] = {
 	      NOTE_E4, NOTE_E4, NOTE_F4, NOTE_G4,
@@ -395,53 +395,59 @@ void NextSound(int16_t *out_left, int16_t *out_right)
     const float sample_rate = 44100.0f;
     const float volume_scale = 6000.0f;
 
-    static float last_val_left = 0.0f;
-    static float last_val_right = 0.0f;
-
+    static float last_val = 0.0f;
     float mixed_sample = 0.0f;
+    static float vibrato_phase = 0.0f;
+
+    vibrato_phase += 5.0f / sample_rate;
+    if (vibrato_phase > 1.0f) vibrato_phase -= 1.0f;
+    float vib_offset = 1.0f + (0.005f * sinf(vibrato_phase * 6.28f));
 
     for (int i = 0; i < MAX_KEYS; i++)
     {
         if (!keys[i].flag) continue;
 
+        float triangle;
+        if (keys[i].phase < 0.5f)
+        	triangle = -1.0f + (4.0f * keys[i].phase);
+        else
+        	triangle = 1.0f - (4.0f * (keys[i].phase - 0.5f));
+
+        float signal = triangle * triangle;
+        if (triangle < 0.0f)
+        	signal = -signal;
+
         float vol_intensify = 1.0f;
-        if (keys[i].t < 0.05f)
-            vol_intensify = keys[i].t / 0.05f; // narastanie glosniosci dzwieku na poczatku
+        if (keys[i].t < 0.015f)
+            vol_intensify = keys[i].t / 0.015f; // narastanie glosniosci dzwieku na poczatku
 
-        float signal = sinf(keys[i].phase) + 0.5f * sinf(keys[i].phase * 2.0f); // charakterystyka aktualnego dzwieku (modulacja fm)
-
-        float vol_fade = (1.0f - keys[i].t);
+        float vol_fade = (1.0f - 0.9f * keys[i].t);
         if (vol_fade <= 0.0f) {
             keys[i].flag = 0; // zanikanie glosnosci na koncu
             continue;
         }
 
-        float current_vol = vol_intensify * (vol_fade * vol_fade); // glosnosc chwilowa
-
-        current_vol *= keys[i].volume_factor; // korekcja czestotliwosci
+        float current_vol = vol_intensify * (vol_fade * vol_fade) * keys[i].volume_factor; // glosnosc chwilowa
 
         mixed_sample += signal * current_vol;
 
-        float phase_advance = tau * keys[i].freq / sample_rate; // aktualizacja fazy
-        keys[i].phase += phase_advance;
-        if (keys[i].phase >= tau) keys[i].phase -= tau;
+        keys[i].phase += keys[i].freq * vib_offset / sample_rate; // aktualizacja fazy
+        if (keys[i].phase >= tau) keys[i].phase -= 1.0f;
 
-        keys[i].t += (1.0f / sample_rate) * 3.0f;
+        keys[i].t += 1.0f / sample_rate;
     }
 
     float raw_out = mixed_sample * volume_scale; // surowy sygnal wyjsciowy
 
-    float filtered_left = 0.6f * raw_out + 0.4f * last_val_left; // nalozenie filtru IIR pierwszego rzedu, zeby wygladzic dzwiek
-    float filtered_right = 0.6f * raw_out + 0.4f * last_val_right; // czesc poprzedniego wyjscia jest dodawana na wejscie
+    if (raw_out > 28000.0f) raw_out = 28000.0f;
+    if (raw_out < -28000.0f) raw_out = -28000.0f;
 
-    last_val_left = filtered_left;
-    last_val_right = filtered_right;
+    float filtered = 0.1f * raw_out + 0.9f * last_val; // nalozenie filtru IIR pierwszego rzedu, zeby wygladzic dzwiek
 
-    if (filtered_left > 32000.0f) filtered_left = 32000.0f; // normowanie
-    if (filtered_left < -32000.0f) filtered_left = -32000.0f;
+    last_val = filtered;
 
-    *out_left = (int16_t)filtered_left;
-    *out_right = (int16_t)filtered_left;
+    *out_left = (int16_t)filtered;
+    *out_right = (int16_t)filtered;
 }
 
 void PlayNote(float freq)
