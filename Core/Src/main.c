@@ -33,11 +33,18 @@
 #include "stm32l476g_discovery_audio.h" // do obslugi funkcji audio
 #include "stm32l476g_discovery.h"       // LED i inicjacja I2C
 #include "math.h"
+#include "usbd_hid.h"
 
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+
+typedef struct __attribute__((packed)) {
+	uint8_t MODIFIER;
+	uint8_t RESERVED;
+	uint8_t KEYS[6]; // tablica aktywnych klawiszy
+} KeyboardReport;
 
 /* USER CODE END PTD */
 
@@ -79,8 +86,10 @@
 
 // maximum number of notes played
 #define MAX_KEYS 6
-
 #define BUFFER_KEYS 12
+
+#define MODE_SYNTH 0 // AudioDAC i glosnik
+#define MODE_HID   1 // VMPK orzez usb
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -94,6 +103,8 @@
 
 extern SAI_HandleTypeDef hsai_BlockA1; 		// dostepy
 extern DMA_HandleTypeDef hdma_sai1_a;
+extern UART_HandleTypeDef huart2;
+extern USBD_HandleTypeDef hUsbDeviceFS; // uchwyt USB z usb_device.c
 
 AUDIO_DrvTypeDef *audio_drv;          		// wskaznik na driver audio
 uint16_t          PlayBuff[PLAY_BUFF_SIZE]; // bufor
@@ -139,6 +150,11 @@ volatile uint8_t ps2_q_tail = 0;
 
 uint8_t key_active[256] = {0};
 
+uint8_t app_mode = MODE_SYNTH; // domyslnie syntezator
+uint32_t last_joy_time = 0;
+
+KeyboardReport kb_report = {0};
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -161,6 +177,10 @@ char PS2ToChar(uint8_t scancode);
 float PS2ToNote(uint8_t scancode);
 uint8_t IsButtonPressed();
 void ProcessPS2Events(void);
+uint8_t PS2ToHIDKey(uint8_t scancode);
+void UpdateKeyList(uint8_t key, uint8_t state);
+void SendHIDReport(void);
+void SilenceAllNotes(void);
 
 /* USER CODE END PFP */
 
@@ -224,32 +244,27 @@ int main(void)
 
   while (1)
   {
-	BSP_LED_Toggle(LED5); // miganie zielona dioda - program dziala poprawnie
+	  if (IsButtonPressed() && (HAL_GetTick() - last_joy_time > 300))
+	  {
+		  last_joy_time = HAL_GetTick();
 
-	uint32_t current_time = HAL_GetTick();
-	uint32_t time_diff = current_time - last_note_time;
-	uint32_t wait_time;
+	      if (app_mode == MODE_SYNTH) {
+	    	  app_mode = MODE_HID; // przelacza na PC
+	          SilenceAllNotes();   // scisza syntezator
+	      } else {
+	          app_mode = MODE_SYNTH; // przelacza na syntezator
+	      }
+	   }
 
-	ProcessPS2Events();
-
-	wait_time = (melody_step >= melody_len) ? 2000 : 400;
-	if (time_diff >= wait_time)
-	{
-		// niebieski JOY_CENTER
-		if(IsButtonPressed())
-			printf("JOY CENTER nacisniety \r\n");
-
-		//granie Ode To Joy
-		//PlayOdeToJoy();
-
-		//przyklad akordu
-		//Play3Notes();
-
-		last_note_time = current_time;
-	}
-
-	// granie muzyki do bufora
-	GenerateSoundToBuffer();
+	  if (app_mode == MODE_SYNTH) {
+		  BSP_LED_On(LED5);  // Zielona = Synth
+	      BSP_LED_Off(LED4);
+	   } else {
+	   BSP_LED_Off(LED5);
+	   BSP_LED_On(LED4);  // Czerwona = PC
+	   }
+	   ProcessPS2Events();
+	   GenerateSoundToBuffer();
 
     /* USER CODE END WHILE */
 
@@ -392,6 +407,11 @@ void GenerateSoundToBuffer(void)
 
 void NextSound(int16_t *out_left, int16_t *out_right)
 {
+	if (app_mode == MODE_HID) {
+		*out_left = 0;
+	    *out_right = 0;
+	    return;
+	}
     const float sample_rate = 44100.0f;
     const float volume_scale = 6000.0f;
 
@@ -653,32 +673,32 @@ char PS2ToChar(uint8_t scancode)
 float PS2ToNote(uint8_t scancode)
 {
 	switch(scancode) {
-	        //(W..I) - TERAZ OKTAWA 2
-	        case 0x1D: return NOTE_C2; // W
-	        case 0x24: return NOTE_D2; // E
-	        case 0x2D: return NOTE_E2; // R
-	        case 0x2C: return NOTE_F2; // T
-	        case 0x35: return NOTE_G2; // Y
-	        case 0x3C: return NOTE_A2; // U
-	        case 0x43: return NOTE_B2; // I
+	        //(Q..U) - OKTAWA 2
+	        case 0x15: return NOTE_C2;
+	        case 0x1D: return NOTE_D2;
+	        case 0x24: return NOTE_E2;
+	        case 0x2D: return NOTE_F2;
+	        case 0x2C: return NOTE_G2;
+	        case 0x35: return NOTE_A2;
+	        case 0x3C: return NOTE_B2;
 
-	        //(S..K) - OKTAWA 3
-	        case 0x1B: return NOTE_C3; // S
-	        case 0x23: return NOTE_D3; // D
-	        case 0x2B: return NOTE_E3; // F
-	        case 0x34: return NOTE_F3; // G
-	        case 0x33: return NOTE_G3; // H
-	        case 0x3B: return NOTE_A3; // J
-	        case 0x42: return NOTE_B3; // K
+	        //(A..J) - OKTAWA 3
+	        case 0x1C: return NOTE_C3;
+	        case 0x1B: return NOTE_D3;
+	        case 0x23: return NOTE_E3;
+	        case 0x2B: return NOTE_F3;
+	        case 0x34: return NOTE_G3;
+	        case 0x33: return NOTE_A3;
+	        case 0x3B: return NOTE_B3;
 
-	        //  (X..<) - OKTAWA 4
-	        case 0x22: return NOTE_C4; // X
-	        case 0x21: return NOTE_D4; // C
-	        case 0x2A: return NOTE_E4; // V
-	        case 0x32: return NOTE_F4; // B
-	        case 0x31: return NOTE_G4; // N
-	        case 0x3A: return NOTE_A4; // M
-	        case 0x41: return NOTE_B4; // , (<)
+	        //  (Z..M) - OKTAWA 4
+	        case 0x1A: return NOTE_C4;
+	        case 0x22: return NOTE_D4;
+	        case 0x21: return NOTE_E4;
+	        case 0x2A: return NOTE_F4;
+	        case 0x32: return NOTE_G4;
+	        case 0x31: return NOTE_A4;
+	        case 0x3A: return NOTE_B4;
 
 	        default: return 0; // 0xF0...
 	    }
@@ -696,6 +716,7 @@ void ProcessPS2Events(void)
 {
     uint8_t code;
     static uint8_t next_is_break = 0; // pamieta miedzy wywolaniami
+    uint8_t hid_update = 0; // flaga dla trybu hid, czy jest jakas zmiana w stanie klawiszy
 
     while(PS2_QueuePop(&code)) // pobranie wszystkich kodow z kolejki
     {
@@ -708,6 +729,13 @@ void ProcessPS2Events(void)
             if (next_is_break) // poprzedni bajt to bylo F0 wiec ten to kod puszczanego klawisza
             {
                 key_active[code] = 0; // reset stanu i flagi
+                if (app_mode == MODE_HID) {
+                	uint8_t hid = PS2ToHIDKey(code);
+                    if(hid != 0){
+                        UpdateKeyList(hid, 0); // aktyualizuje liste aktywnych klawiszy
+                        hid_update = 1; // aktywuje flage, ze jest cos do wyslania
+                    }
+                }
                 next_is_break = 0;
             }
             else // wcisniecie
@@ -715,12 +743,106 @@ void ProcessPS2Events(void)
                 if (key_active[code] == 0) // sprawdzenie czy wczesniej nie byl wcisniety
                 {
                     key_active[code] = 1;
-                    PlayNote(PS2ToNote(code));
-                    char note = PS2ToChar(code); // drukowanie do debugowania
-                    if(note != 0) printf("%c\r\n", note);
+                    if (app_mode == MODE_SYNTH) {
+                    	PlayNote(PS2ToNote(code)); // granie samodzielne
+                    } else {
+                    	uint8_t hid = PS2ToHIDKey(code);
+                        if(hid != 0){
+                        	UpdateKeyList(hid, 1);
+                        	hid_update = 1;
+                        }
+                    }
                 }
             }
         }
+    }
+    if (app_mode == MODE_HID && hid_update)
+    	SendHIDReport(); // wyslanie informacji o aktualnym stanie klawiatury
+}
+
+void SilenceAllNotes(void)
+{
+    for(int i=0; i<MAX_KEYS; i++) {
+        keys[i].flag = 0;
+        keys[i].t = 0.0f;
+    }
+}
+
+uint8_t PS2ToHIDKey(uint8_t scancode)
+{
+    switch(scancode) { // kpnwersja z keycodes PS2 na keycodes USB
+        //(Q..U) - OKTAWA 2
+        case 0x15: return 0x14;
+        case 0x1D: return 0x1A;
+        case 0x24: return 0x08;
+        case 0x2D: return 0x15;
+        case 0x2C: return 0x17;
+        case 0x35: return 0x1C;
+        case 0x3C: return 0x18;
+
+        //(A..J) - OKTAWA 3
+        case 0x1C: return 0x04;
+        case 0x1B: return 0x16;
+        case 0x23: return 0x07;
+        case 0x2B: return 0x09;
+        case 0x34: return 0x0A;
+        case 0x33: return 0x0B;
+        case 0x3B: return 0x0D;
+
+        //  (Z..M) - OKTAWA 4
+        case 0x1A: return 0x1D;
+        case 0x22: return 0x1B;
+        case 0x21: return 0x06;
+        case 0x2A: return 0x19;
+        case 0x32: return 0x05;
+        case 0x31: return 0x11;
+        case 0x3A: return 0x10;
+
+        default: return 0;
+    }
+}
+
+
+void UpdateKeyList(uint8_t key, uint8_t state)
+{
+    if (key == 0) return;
+
+    if (state == 1) // wykrycie wcisniecia
+    {
+        for (int i = 0; i < 6; i++) {
+            if (kb_report.KEYS[i] == key) return; // jesli klawisz juz wczesniej dzialal, to wychodzi
+        }
+        for (int i = 0; i < 6; i++) {
+            if (kb_report.KEYS[i] == 0) {
+                kb_report.KEYS[i] = key; // jesli nie, to wpisuje go w pierwsze wolne miejsce na liscie
+                break;
+            }
+        }
+    }
+    else // wykrycie puszczenia
+    {
+        for (int i = 0; i < 6; i++) {
+            if (kb_report.KEYS[i] == key) {
+                kb_report.KEYS[i] = 0; // szuka klawisza na liscie i zwalnia jego miejsce
+            }
+        }
+        uint8_t temp[6] = {0};
+        int idx = 0;
+        for (int i = 0; i < 6; i++) {
+            if (kb_report.KEYS[i] != 0) {
+                temp[idx++] = kb_report.KEYS[i]; // przepisanie aktywnych klawiszy tak, aby nie bylo miedzy nimi dziur w tablicy
+            }
+        }
+        for(int i=0; i<6; i++) kb_report.KEYS[i] = temp[i];
+    }
+}
+
+void SendHIDReport(void)
+{
+    uint32_t timeout = HAL_GetTick();
+    while (USBD_HID_SendReport(&hUsbDeviceFS, (uint8_t*)&kb_report, sizeof(kb_report)) != USBD_OK)
+    {
+        if (HAL_GetTick() - timeout > 5) break; // czeka na gotowosc usb, ale jak minie 5ms bez odp to pomija klatke
     }
 }
 
