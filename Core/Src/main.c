@@ -181,6 +181,7 @@ uint8_t PS2ToHIDKey(uint8_t scancode);
 void UpdateKeyList(uint8_t key, uint8_t state);
 void SendHIDReport(void);
 void SilenceAllNotes(void);
+void SendShortcut(void);
 
 /* USER CODE END PFP */
 
@@ -251,6 +252,9 @@ int main(void)
 	      if (app_mode == MODE_SYNTH) {
 	    	  app_mode = MODE_HID; // przelacza na PC
 	          SilenceAllNotes();   // scisza syntezator
+
+	          HAL_Delay(100);
+	          SendShortcut();
 	      } else {
 	          app_mode = MODE_SYNTH; // przelacza na syntezator
 	      }
@@ -732,7 +736,7 @@ void ProcessPS2Events(void)
                 if (app_mode == MODE_HID) {
                 	uint8_t hid = PS2ToHIDKey(code);
                     if(hid != 0){
-                        UpdateKeyList(hid, 0); // aktyualizuje liste aktywnych klawiszy
+                        UpdateKeyList(hid, 0); // aktualizuje liste aktywnych klawiszy
                         hid_update = 1; // aktywuje flage, ze jest cos do wyslania
                     }
                 }
@@ -844,6 +848,20 @@ void SendHIDReport(void)
     {
         if (HAL_GetTick() - timeout > 5) break; // czeka na gotowosc usb, ale jak minie 5ms bez odp to pomija klatke
     }
+}
+
+void SendShortcut(void) // wysyla info ze aktywny f12, ktory uruchamia VMPK i Qsynth
+{
+    for(int i=0; i<6; i++) kb_report.KEYS[i] = 0; // czysci wszystkie klawisze
+    kb_report.MODIFIER = 0;
+
+    kb_report.KEYS[0] = 0x45; // wcisniecie F12
+    SendHIDReport();
+
+    HAL_Delay(50); // czekanie na odpalenie skryptu
+
+    kb_report.KEYS[0] = 0; // puszczenie F12
+    SendHIDReport();
 }
 
 
