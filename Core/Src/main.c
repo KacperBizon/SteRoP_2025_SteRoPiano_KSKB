@@ -85,7 +85,7 @@ typedef struct __attribute__((packed)) {
 
 
 // maximum number of notes played
-#define MAX_KEYS 6
+#define MAX_KEYS 7
 #define BUFFER_KEYS 20
 
 #define MODE_SYNTH 0 // AudioDAC i glosnik
@@ -416,7 +416,7 @@ void NextSound(int16_t *out_left, int16_t *out_right)
 	    return;
 	}
     const float sample_rate = 44100.0f;
-    const float volume_scale = 6000.0f;
+    const float volume_scale = 5000.0f;
 
     static float last_val = 0.0f;
     float mixed_sample = 0.0f;
@@ -455,15 +455,20 @@ void NextSound(int16_t *out_left, int16_t *out_right)
         mixed_sample += signal * current_vol;
 
         keys[i].phase += keys[i].freq * vib_offset / sample_rate; // aktualizacja fazy
-        if (keys[i].phase >= tau) keys[i].phase -= 1.0f;
+        if (keys[i].phase >= 1.0f) keys[i].phase -= 1.0f;
+        //if (keys[i].phase >= tau) keys[i].phase -= tau;
 
         keys[i].t += 1.0f / sample_rate;
     }
 
     float raw_out = mixed_sample * volume_scale; // surowy sygnal wyjsciowy
 
-    if (raw_out > 28000.0f) raw_out = 28000.0f;
-    if (raw_out < -28000.0f) raw_out = -28000.0f;
+    //if (raw_out > 28000.0f) raw_out = 28000.0f;
+    //if (raw_out < -28000.0f) raw_out = -28000.0f;
+    if (raw_out > 24000.0f)
+        raw_out = 24000.0f + tanhf((raw_out - 24000.0f) / 10000.0f) * 2000.0f;
+    else if (raw_out < -24000.0f)
+        raw_out = -24000.0f + tanhf((raw_out + 24000.0f) / 10000.0f) * 2000.0f;
 
     float filtered = 0.1f * raw_out + 0.9f * last_val; // nalozenie filtru IIR pierwszego rzedu, zeby wygladzic dzwiek
 
@@ -477,8 +482,8 @@ void PlayNote(float freq)
 {
     for (int i = 0; i < MAX_KEYS; i++) {
         if (keys[i].flag == 1 && fabsf(keys[i].freq - freq) < 0.1f) { // sprawdzenie czy nuta juz gra
-            keys[i].t = 0.0f; // jak tak, to resetuje czas trwania i faze
-            keys[i].phase = 0.0f;
+            keys[i].t = 0.0f; // jak tak, to resetuje czas trwania
+            //keys[i].phase = 0.0f; // faza
             return;
         }
     }
@@ -547,10 +552,6 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 
     	if(readPS2(data_bit) == 1)
     	{
-//    		char char_code = PS2ToChar(ps2_scancode);
-//    		if(char_code != 0)
-//    			printf("%c\n", char_code);
-
     		PS2_QueuePush(ps2_scancode);
     	}
     }
@@ -709,7 +710,7 @@ float PS2ToNote(uint8_t scancode)
 	        case 0x31: return NOTE_A4;
 	        case 0x3A: return NOTE_B4;
 
-	        default: return 0; // 0xF0...
+	        default: return 0.0; // 0xF0...
 	    }
 }
 
@@ -729,14 +730,20 @@ void ProcessPS2Events(void)
 
     while(PS2_QueuePop(&code)) // obsługa wszystkich kodow z bufora po kolei
     {
+//		char char_code = PS2ToChar(ps2_scancode);
+//		if(char_code != 0)
+//			printf("%c\n", char_code);
+
         if (code == 0xF0) // kod zwolnienia klawisza
         {
             next_is_break = 1;
         }
         else
         {
-            if (next_is_break) // poprzedni bajt to bylo F0 wiec ten to kod puszczanego klawisza
+            if (next_is_break) // poprzedni bajt to bylo 0xF0 wiec ten to kod puszczanego klawisza
             {
+                next_is_break = 0;
+
                 key_active[code] = 0; // reset stanu i flagi
                 if (app_mode == MODE_HID) {
                 	uint8_t hid = PS2ToHIDKey(code);
@@ -745,16 +752,20 @@ void ProcessPS2Events(void)
                         hid_update = 1; // aktywuje flage, ze jest cos do wyslania
                     }
                 }
-                next_is_break = 0;
             }
             else // wcisniecie
             {
                 if (key_active[code] == 0) // sprawdzenie czy wczesniej nie byl wcisniety
                 {
                     key_active[code] = 1;
-                    if (app_mode == MODE_SYNTH) {
-                    	PlayNote(PS2ToNote(code)); // granie samodzielne
-                    } else {
+                    if (app_mode == MODE_SYNTH)
+                    {
+                    	float note_freq = PS2ToNote(code);
+                    	if(note_freq > 0.1f)
+                    		PlayNote(note_freq); // granie samodzielne
+                    }
+                    else
+                    {
                     	uint8_t hid = PS2ToHIDKey(code);
                         if(hid != 0){
                         	UpdateKeyList(hid, 1);
