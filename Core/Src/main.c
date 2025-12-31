@@ -86,7 +86,7 @@ typedef struct __attribute__((packed)) {
 
 // maximum number of notes played
 #define MAX_KEYS 6
-#define BUFFER_KEYS 12
+#define BUFFER_KEYS 20
 
 #define MODE_SYNTH 0 // AudioDAC i glosnik
 #define MODE_HID   1 // VMPK orzez usb
@@ -182,6 +182,7 @@ void UpdateKeyList(uint8_t key, uint8_t state);
 void SendHIDReport(void);
 void SilenceAllNotes(void);
 void SendShortcut(void);
+void TurnDiodes(void);
 
 /* USER CODE END PFP */
 
@@ -237,38 +238,36 @@ int main(void)
   Playback_Init(); // inicjalizacja audio
 
   Load_Audio();
-
+  TurnDiodes();
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-
   while (1)
   {
-	  if (IsButtonPressed() && (HAL_GetTick() - last_joy_time > 300))
+	  if (IsButtonPressed() && (HAL_GetTick() - last_joy_time > 500))
 	  {
 		  last_joy_time = HAL_GetTick();
 
-	      if (app_mode == MODE_SYNTH) {
+	      if (app_mode == MODE_SYNTH)
+	      {
 	    	  app_mode = MODE_HID; // przelacza na PC
 	          SilenceAllNotes();   // scisza syntezator
 
 	          HAL_Delay(100);
 	          SendShortcut();
-	      } else {
+	      }
+	      else
+	      {
 	          app_mode = MODE_SYNTH; // przelacza na syntezator
 	      }
+
+	      TurnDiodes();
 	   }
 
-	  if (app_mode == MODE_SYNTH) {
-		  BSP_LED_On(LED5);  // Zielona = Synth
-	      BSP_LED_Off(LED4);
-	   } else {
-	   BSP_LED_Off(LED5);
-	   BSP_LED_On(LED4);  // Czerwona = PC
-	   }
-	   ProcessPS2Events();
-	   GenerateSoundToBuffer();
+
+       ProcessPS2Events();
+       GenerateSoundToBuffer();
 
     /* USER CODE END WHILE */
 
@@ -547,7 +546,13 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
     	int data_bit = HAL_GPIO_ReadPin(PS2_DATA_GPIO_Port, PS2_DATA_Pin);
 
     	if(readPS2(data_bit) == 1)
-            PS2_QueuePush(ps2_scancode);
+    	{
+//    		char char_code = PS2ToChar(ps2_scancode);
+//    		if(char_code != 0)
+//    			printf("%c\n", char_code);
+
+    		PS2_QueuePush(ps2_scancode);
+    	}
     }
 }
 
@@ -566,8 +571,7 @@ void ps2WatchDog()
 
 uint8_t readPS2(int data_bit)
 {
-
-    //  PS/2 Protocol: 1 Start, 8 Data, 1 Parity, 1 Stop (11 bits total)
+    //  PS/2: 1 bit startu, 8 bitów danych, 1 bit parzystosc, 1 bit stopu
     if (ps2_bit_count > 0 && ps2_bit_count < 9)
     {
         if (data_bit)
@@ -575,7 +579,7 @@ uint8_t readPS2(int data_bit)
             ps2_scancode |= (1 << (ps2_bit_count - 1));
         }
     }
-    // start bit
+    // bit startu
     else if (ps2_bit_count == 0)
     {
         ps2_scancode = 0;
@@ -583,6 +587,7 @@ uint8_t readPS2(int data_bit)
 
     ps2_bit_count++;
 
+    // bit stopu ignorowany
     if (ps2_bit_count >= 11)
     {
     	ps2_bit_count = 0;
@@ -722,7 +727,7 @@ void ProcessPS2Events(void)
     static uint8_t next_is_break = 0; // pamieta miedzy wywolaniami
     uint8_t hid_update = 0; // flaga dla trybu hid, czy jest jakas zmiana w stanie klawiszy
 
-    while(PS2_QueuePop(&code)) // pobranie wszystkich kodow z kolejki
+    while(PS2_QueuePop(&code)) // obsługa wszystkich kodow z bufora po kolei
     {
         if (code == 0xF0) // kod zwolnienia klawisza
         {
@@ -862,6 +867,20 @@ void SendShortcut(void) // wysyla info ze aktywny f12, ktory uruchamia VMPK i Qs
 
     kb_report.KEYS[0] = 0; // puszczenie F12
     SendHIDReport();
+}
+
+void TurnDiodes(void)
+{
+	if (app_mode == MODE_SYNTH)
+	{
+	  BSP_LED_On(LED5);  // Zielona = Synth
+	  BSP_LED_Off(LED4);
+	}
+	else
+	{
+	  BSP_LED_Off(LED5);
+	  BSP_LED_On(LED4);  // Czerwona = PC
+	}
 }
 
 
