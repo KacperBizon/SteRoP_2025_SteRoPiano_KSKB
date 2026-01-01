@@ -5,7 +5,6 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 
 
 # instalacja VMPK i QSynth jesli nie ma
-
 echo "[1/4] Checking required programs..."
 
 if dpkg -s qsynth >/dev/null 2>&1 && dpkg -s vmpk >/dev/null 2>&1; then
@@ -18,7 +17,6 @@ fi
 
 
 # lokalizowanie skryptu do odpalania API
-
 echo "[2/4] Looking for boot script..."
 
 TARGET_SCRIPT="$SCRIPT_DIR/boot_api.sh" # powinien byc w tym samym folderze co setup
@@ -34,14 +32,12 @@ fi
 
 
 # nadawanie uprawnien wykonywalnosci skryptowi
-
 echo "[3/4] Granting permission to execute..."
 chmod +x "$TARGET_SCRIPT"
 echo "   -> OK."
 
 
-# ustawianie skrotu F12 w linuxie
-
+# ustawianie skrotu F12
 if command -v gsettings &> /dev/null; then
     echo "[4/4] Adding F12 keyboard shortcut..."
     
@@ -59,7 +55,6 @@ if command -v gsettings &> /dev/null; then
     if [[ $CURRENT_LIST == *"$KEY_PATH"* ]]; then
         echo "   -> Shortcut already on the list. Updating path..."
     else
-        # dodawanie do listy
         if [[ "$CURRENT_LIST" == "@as []" ]] || [[ "$CURRENT_LIST" == "[]" ]]; then
             NEW_LIST="['$KEY_PATH']"
         else
@@ -67,7 +62,6 @@ if command -v gsettings &> /dev/null; then
             NEW_LIST="${CLEAN_LIST%]}, '$KEY_PATH']"
         fi
         
-        # ustawienie nowej listy
         gsettings set $PATH_MKEY custom-keybindings "$NEW_LIST"
     fi
 
